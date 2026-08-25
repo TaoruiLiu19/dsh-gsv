@@ -1,6 +1,6 @@
-import { execSync, spawn } from 'child_process';
-import { existsSync, writeFileSync, copyFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { execFileSync, spawn } from 'child_process';
+import { existsSync, writeFileSync, copyFileSync, readFileSync } from 'fs';
+import { join, dirname, delimiter } from 'path';
 import { fileURLToPath } from 'url';
 import type { HealthCheckResult, SetupResult, SetupStep } from './types.js';
 
@@ -8,6 +8,12 @@ const GSV_REPO = 'https://github.com/chinokikiss/GSV-TTS-Lite.git';
 const GSV_VERSION = '0.4.7';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/** Python 解释器与启动前缀（如 Windows `py -3`）。 */
+interface PythonCmd {
+  bin: string;
+  prefix: string[];
+}
 
 export class EngineSetup {
   constructor(private apiUrl: string, private installDir: string) {}
@@ -30,19 +36,20 @@ export class EngineSetup {
       result.apiRunning = false;
     }
 
-    const pythonCmd = this.detectPythonCmd();
-    if (pythonCmd) {
+    const python = this.detectPythonCmd();
+    if (python) {
       result.pythonInstalled = true;
       try {
-        result.pythonVersion = execSync(`${pythonCmd} --version 2>&1`, { encoding: 'utf-8', timeout: 10000 }).trim();
+        result.pythonVersion = execFileSync(python.bin, [...python.prefix, '--version'], {
+          encoding: 'utf-8',
+          timeout: 10000,
+          stdio: 'pipe',
+        }).trim();
       } catch {
         result.pythonVersion = 'unknown';
       }
-    }
-
-    if (pythonCmd) {
       try {
-        execSync(`${pythonCmd} -c "import gsv_tts" 2>&1`, { encoding: 'utf-8', timeout: 15000 });
+        this.probeGsvTts(python);
         result.pipPackageInstalled = true;
       } catch {
         result.pipPackageInstalled = false;
@@ -60,11 +67,26 @@ export class EngineSetup {
 
     if (health.apiRunning) {
       steps.push({ step: '检测 API 服务', status: 'success', message: `服务已在 ${this.apiUrl} 运行` });
+      // API 已在运行：检测部署的流式脚本是否与插件捆绑版本一致（不一致需重启生效）
+      const bundledScript = join(__dirname, '..', 'scripts', 'dsh_stream_api.py');
+      const targetScript = join(this.installDir, 'API', 'dsh_stream_api.py');
+      if (existsSync(bundledScript) && existsSync(targetScript)) {
+        try {
+          const bundled = readFileSync(bundledScript);
+          const deployed = readFileSync(targetScript);
+          if (!bundled.equals(deployed)) {
+            steps.push({ step: '检测流式 API 版本', status: 'failed', message: '已部署的 dsh_stream_api.py 与插件版本不一致，请重启引擎服务使新版生效' });
+            return { success: false, steps, apiUrl: this.apiUrl, message: '服务在运行，但流式 API 脚本需要更新（重启引擎后生效）' };
+          }
+        } catch {
+          // 读取失败则跳过版本检测
+        }
+      }
       return { success: true, steps, apiUrl: this.apiUrl, message: 'GSV-TTS-Lite 已就绪' };
     }
 
-    const pythonCmd = this.detectPythonCmd();
-    if (!pythonCmd) {
+    const python = this.detectPythonCmd();
+    if (!python) {
       steps.push({ step: '检测 Python', status: 'failed', message: '未检测到 Python，请先安装 Python 3.10+' });
       return { success: false, steps, apiUrl: this.apiUrl, message: '缺少 Python 环境' };
     }
@@ -72,7 +94,11 @@ export class EngineSetup {
 
     if (!health.pipPackageInstalled) {
       try {
-        execSync(`${pythonCmd} -m pip install gsv-tts-lite==${GSV_VERSION} 2>&1`, { encoding: 'utf-8', timeout: 300000, stdio: 'pipe' });
+        execFileSync(python.bin, [...python.prefix, '-m', 'pip', 'install', `gsv-tts-lite==${GSV_VERSION}`], {
+          encoding: 'utf-8',
+          timeout: 300000,
+          stdio: 'pipe',
+        });
         steps.push({ step: '安装 gsv-tts-lite', status: 'success', message: `gsv-tts-lite==${GSV_VERSION} 安装成功` });
       } catch {
         steps.push({ step: '安装 gsv-tts-lite', status: 'failed', message: `pip install gsv-tts-lite==${GSV_VERSION} 失败` });
@@ -84,7 +110,11 @@ export class EngineSetup {
 
     if (!health.repoCloned) {
       try {
-        execSync(`git clone ${GSV_REPO} "${this.installDir}" 2>&1`, { encoding: 'utf-8', timeout: 120000, stdio: 'pipe' });
+        execFileSync('git', ['clone', '--depth', '1', GSV_REPO, this.installDir], {
+          encoding: 'utf-8',
+          timeout: 120000,
+          stdio: 'pipe',
+        });
         steps.push({ step: '克隆仓库', status: 'success', message: `已克隆到 ${this.installDir}` });
       } catch {
         steps.push({ step: '克隆仓库', status: 'failed', message: `git clone 失败，请手动克隆 ${GSV_REPO}` });
@@ -101,7 +131,11 @@ export class EngineSetup {
     }
 
     try {
-      execSync(`${pythonCmd} -m pip install -r "${join(apiDir, 'requirements.txt')}" 2>&1`, { encoding: 'utf-8', timeout: 300000, stdio: 'pipe' });
+      execFileSync(python.bin, [...python.prefix, '-m', 'pip', 'install', '-r', join(apiDir, 'requirements.txt')], {
+        encoding: 'utf-8',
+        timeout: 300000,
+        stdio: 'pipe',
+      });
       steps.push({ step: '安装 API 依赖', status: 'success', message: 'requirements.txt 安装完成' });
     } catch {
       steps.push({ step: '安装 API 依赖', status: 'failed', message: 'pip install -r requirements.txt 失败' });
@@ -132,7 +166,7 @@ export class EngineSetup {
       : join(this.installDir, 'API', 'models');
 
     // 动态检测 Python 系统路径和 gsv_tts 安装路径
-    const { systemSitePackages, gsvSitePackages, repoRoot } = this.detectPythonPaths(pythonCmd);
+    const { systemSitePackages, gsvSitePackages, repoRoot } = this.detectPythonPaths(python);
 
     // 生成 wrapper：所有路径动态注入，无硬编码
     const wrapperPath = join(apiDir, 'dsh_start_wrapper.py');
@@ -143,10 +177,10 @@ export class EngineSetup {
     let processExited = false;
     let exitCode: number | null = null;
 
-    const child = spawn(pythonCmd, ['dsh_start_wrapper.py', '-p', String(port), '--models_dir', modelsDir], {
+    const child = spawn(python.bin, [...python.prefix, 'dsh_start_wrapper.py', '-p', String(port), '--models_dir', modelsDir], {
       cwd: apiDir,
       detached: true,
-      shell: process.platform === 'win32',
+      shell: false,
       stdio: ['ignore', 'ignore', 'pipe'],
     });
 
@@ -206,11 +240,16 @@ export class EngineSetup {
     return { success: false, steps, apiUrl: this.apiUrl, message: '服务启动后退出，请检查日志' };
   }
 
-  private detectPythonCmd(): string | null {
-    for (const cmd of ['python', 'python3']) {
+  private detectPythonCmd(): PythonCmd | null {
+    const candidates: Array<[string, string[]]> = [
+      ['python', []],
+      ['python3', []],
+      ['py', ['-3']],
+    ];
+    for (const [bin, prefix] of candidates) {
       try {
-        execSync(`${cmd} --version 2>&1`, { encoding: 'utf-8', timeout: 10000 });
-        return cmd;
+        execFileSync(bin, [...prefix, '--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
+        return { bin, prefix };
       } catch {
         continue;
       }
@@ -218,7 +257,38 @@ export class EngineSetup {
     return null;
   }
 
-  private detectPythonPaths(pythonCmd: string): {
+  /** 探测 gsv_tts 是否可用：先试系统裸路径，再试仓库源码 / --target 安装路径。 */
+  private probeGsvTts(python: PythonCmd): void {
+    const args = [...python.prefix, '-c', 'import gsv_tts'];
+    const options: { encoding: 'utf-8'; timeout: number; stdio: 'pipe'; env?: NodeJS.ProcessEnv } = {
+      encoding: 'utf-8',
+      timeout: 15000,
+      stdio: 'pipe',
+    };
+    try {
+      execFileSync(python.bin, args, options);
+      return;
+    } catch {
+      // 系统路径不可导入——尝试仓库源码 / --target 布局（与 dsh_stream_api.py 一致）
+    }
+    // 系统 site-packages 必须排在 --target 之前，避免 huggingface-hub 等版本冲突
+    const { systemSitePackages } = this.detectPythonPaths(python);
+    const repoRoot = this.installDir.replace(/\\/g, '/');
+    const extra = [
+      systemSitePackages,
+      repoRoot,
+      join(this.installDir, '..', 'site-packages'),
+      join(this.installDir, 'site-packages'),
+    ].filter((p): p is string => !!p && existsSync(p));
+    if (extra.length === 0) throw new Error('gsv_tts not importable');
+    const existing = process.env.PYTHONPATH ?? '';
+    execFileSync(python.bin, args, {
+      ...options,
+      env: { ...process.env, PYTHONPATH: [...extra, existing].filter(Boolean).join(delimiter) },
+    });
+  }
+
+  private detectPythonPaths(python: PythonCmd): {
     systemSitePackages: string | null;
     gsvSitePackages: string | null;
     repoRoot: string;
@@ -228,20 +298,22 @@ export class EngineSetup {
 
     // 检测 Python 系统包路径
     try {
-      systemSitePackages = execSync(
-        `${pythonCmd} -c "import site; print(site.getsitepackages()[0])" 2>&1`,
-        { encoding: 'utf-8', timeout: 10000 }
-      ).trim();
+      systemSitePackages = execFileSync(python.bin, [...python.prefix, '-c', 'import site; print(site.getsitepackages()[0])'], {
+        encoding: 'utf-8',
+        timeout: 10000,
+        stdio: 'pipe',
+      }).trim();
     } catch {
       // 忽略
     }
 
     // 检测 gsv_tts 安装位置（可能 --target 安装在非标准路径）
     try {
-      const gsvPath = execSync(
-        `${pythonCmd} -c "import gsv_tts; print(gsv_tts.__file__)" 2>&1`,
-        { encoding: 'utf-8', timeout: 10000 }
-      ).trim();
+      const gsvPath = execFileSync(python.bin, [...python.prefix, '-c', 'import gsv_tts; print(gsv_tts.__file__)'], {
+        encoding: 'utf-8',
+        timeout: 10000,
+        stdio: 'pipe',
+      }).trim();
       // gsv_tts.__file__ = .../site-packages/gsv_tts/__init__.py
       // site-packages = dirname(dirname(gsv_tts.__file__))
       if (gsvPath && !gsvPath.includes('Error') && !gsvPath.includes('Traceback')) {

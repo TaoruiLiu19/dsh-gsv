@@ -1,5 +1,10 @@
 node_modules/
-lib/
+lib/*
+# 手写的客户端 bundle（非 tsc 产物），必须随仓库发布
+!lib/client.js
+!lib/client.d.ts
 *.log
 .DS_Store
 Thumbs.db
+.pnpm-store/
+__pycache__/

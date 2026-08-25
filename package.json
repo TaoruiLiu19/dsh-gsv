@@ -1,9 +1,21 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "2.0.0",
-  "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, and engine setup assistant",
+  "version": "2.2.0",
+  "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, engine setup assistant, read-aloud button, and settings panel",
   "type": "module",
   "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/client.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "lib",
     "scripts",
@@ -12,15 +24,26 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-modules"
+      ],
+      "platform": "web"
     }
   },
   "scripts": {
     "build": "tsc",
-    "clean": "rimraf lib"
+    "prepare": "tsc",
+    "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\""
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
-    "@deepseek-ai/schemastery": "^3.18.1"
+    "@deepseek-ai/dsh-tools": ">=0.1.0-rc.6"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -25,18 +25,6 @@ export class VoiceManager {
     return this.voices.values().next().value;
   }
 
-  add(voice: VoicePreset): void {
-    this.voices.set(voice.name, voice);
-  }
-
-  remove(name: string): boolean {
-    return this.voices.delete(name);
-  }
-
-  has(name: string): boolean {
-    return this.voices.has(name);
-  }
-
   get defaultName(): string {
     return this.defaultVoice;
   }

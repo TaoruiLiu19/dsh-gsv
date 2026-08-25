@@ -6,5 +6,5 @@
         defaultVoice: ""
         autoPlay: false
         timeout: 30000
-        installDir: ""
+        installDir: ./GSV-TTS-Lite
         voices: []
