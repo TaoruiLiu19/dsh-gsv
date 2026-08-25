@@ -13,7 +13,7 @@ DSH（DeepSeek Harness）插件，接入 [GSV-TTS-Lite](https://github.com/chino
 ## 安装
 
 ```bash
-dsh plugin --profile web add "github:your-username/dsh-gsv-tts"
+dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 ```
 
 重启 DSH Web 后，4 个工具自动注册到 agent。
