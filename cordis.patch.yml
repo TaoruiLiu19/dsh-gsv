@@ -1,0 +1,10 @@
+- insert:
+    - id: dsh-gsv-tts
+      name: dsh-gsv-tts
+      config:
+        apiUrl: http://localhost:9880
+        defaultVoice: ""
+        autoPlay: false
+        timeout: 30000
+        installDir: ""
+        voices: []
