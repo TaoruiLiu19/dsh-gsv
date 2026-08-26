@@ -2,6 +2,8 @@
 
 DSH（DeepSeek Harness）插件，接入 [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) 本地 TTS 服务：音色克隆、流式合成、自动朗读、一键朗读、引擎一键启停。
 
+English README: [README_EN.md](README_EN.md)
+
 ## 功能
 
 - **声音设置面板**：设置 → 声音设置，可视化配置引擎、音色、自动朗读等，**保存即热生效**（无需重启）
@@ -13,11 +15,23 @@ DSH（DeepSeek Harness）插件，接入 [GSV-TTS-Lite](https://github.com/chino
 
 ## 安装
 
+两种方式任选其一，然后在设置中启用：
+
+### 方式一：从 npm 安装
+
+```bash
+dsh plugin --profile web add dsh-gsv-tts
+```
+
+### 方式二：从 GitHub 安装
+
 ```bash
 dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 ```
 
-重启 DSH 后，工具自动注册到 agent，设置中会出现"声音设置"项。
+> **关于 profile**：以上以 `web` profile 为例；当前桌面应用常用 `desktop` profile，把命令里的 `web` 换成 `desktop` 即可。
+
+安装后重启 DSH，工具自动注册到 agent，设置中出现"声音设置"项。
 
 > 依赖 DSH 的 `webServer` 服务（Web / Desktop profile 自带）提供音频下载；`settings` 服务提供设置面板。无这些服务的环境仅保留工具能力。
 
@@ -27,6 +41,20 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 2. **启动引擎**：设置 → 声音设置 → 打开"启动引擎"开关，等待状态变为"运行中"（模型加载约 15~90 秒）
 3. **添加音色**：设置 → 声音设置 → "音色预设" → 添加音色 → 填写四字段 → 保存
 4. **朗读**：点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
+
+## 截图
+
+![声音设置面板](docs/images/settings-voice.png)
+
+*设置 → 声音设置：引擎开关、TTS 配置、帮助文档*
+
+![朗读按钮](docs/images/read-button.png)
+
+*消息操作区的 🔊 朗读按钮（悬停显示"朗读结果"）*
+
+![引擎运行中](docs/images/engine-running.png)
+
+*引擎启动后的"运行中"状态*
 
 ## 下载安装 GSV-TTS-Lite 引擎
 
@@ -103,14 +131,15 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 - TTS 引擎：GSV-TTS-Lite 0.4.7
 - 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（流式 API）
 
-## 构建
+## 构建与发布
 
 ```bash
 pnpm install
-pnpm build
+pnpm build        # 编译宿主代码（lib/）
+pnpm publish      # 发布到 npm（files: lib, scripts, cordis.patch.yml）
 ```
 
-（从 GitHub 安装会自动执行 `prepare` 脚本编译；`lib/client.js` 为手写客户端 bundle，随仓库发布。）
+从 GitHub 安装会自动执行 `prepare` 脚本编译；`lib/client.js` 为手写客户端 bundle，随仓库发布。
 
 ## 变更记录
 

@@ -19,7 +19,10 @@
   "files": [
     "lib",
     "scripts",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "docs",
+    "README.md",
+    "README_EN.md"
   ],
   "dsh": {
     "bundle": {
