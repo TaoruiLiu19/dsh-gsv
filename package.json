@@ -1,7 +1,25 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, engine setup assistant, read-aloud button, and settings panel",
+  "keywords": [
+    "dsh-plugin",
+    "tts",
+    "voice",
+    "voice-cloning",
+    "text-to-speech",
+    "speech-synthesis",
+    "deepseek-harness"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TaoruiLiu19/dsh-gsv.git"
+  },
+  "homepage": "https://github.com/TaoruiLiu19/dsh-gsv#readme",
+  "bugs": {
+    "url": "https://github.com/TaoruiLiu19/dsh-gsv/issues"
+  },
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/index.d.ts",
