@@ -1,36 +1,36 @@
 # dsh-gsv-tts
 
+> A DSH (DeepSeek Harness) plugin that integrates the [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) local TTS engine — voice cloning, streaming synthesis, auto-read, one-click read-aloud, and one-click engine control, all running locally.
+
 ![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
 ![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
 
-A DSH (DeepSeek Harness) plugin that integrates the [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) local TTS engine: voice cloning, streaming synthesis, auto-read, one-click read-aloud, and one-click engine control.
+中文 README: [README.md](README.md) · Changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
-中文 README: [README.md](README.md)
+---
 
-## Features
+## ✨ Features
 
-- **Voice Settings panel**: Settings → Voice Settings — configure the engine, voices, auto-read, etc., with **hot-applied changes** (no restart needed)
-- **Engine switch**: start/stop the local GSV-TTS-Lite engine with one toggle (off by default)
-- **Read-aloud button**: a 🔊 button next to copy/like on every assistant message reads that result aloud (thinking/reasoning excluded); when the engine is off it explains why
-- **Auto-read**: automatically synthesize assistant replies when enabled
-- **TTS tools**: `tts_speak` (streaming, returns a same-origin short link), `tts_list_voices`, `tts_health_check`, `tts_setup_engine`
-- **Audio delivery**: synthesized audio is saved as WAV and served through the DSH web server as a same-origin short link (no more giant data URLs in model context)
+- 🎙️ **Voice cloning**: clone a target voice from reference audio; selectable by name in `tts_speak`
+- ⚡ **True streaming synthesis**: SSE chunk-by-chunk synthesis — the first chunk is pushed as soon as it arrives
+- 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded)
+- 🔁 **Auto-read**: automatically synthesize assistant replies when enabled
+- 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart)
+- 🚀 **One-click engine control**: start/stop the local GSV-TTS-Lite engine (model loading ~15–90 s)
+- 🛠️ **One-click engine setup**: `tts_setup_engine` auto-detects Python, installs deps, clones the repo, and starts the service
+- 🔗 **Same-origin audio short links**: audio is saved as WAV and served by the DSH web server — no more giant data URLs in the model context
 
-## Installation
+## 📦 Installation
 
 Choose one of the two methods, then enable it in Settings:
 
-### Option 1: Install from npm
-
 ```bash
+# Option 1: Install from npm
 dsh plugin --profile web add dsh-gsv-tts
-```
 
-### Option 2: Install from GitHub
-
-```bash
+# Option 2: Install from GitHub
 dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 ```
 
@@ -40,14 +40,28 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 > Requires the DSH `webServer` service (bundled with the Web/Desktop profiles) for audio delivery and the `settings` service for the settings panel. Environments without these services keep only the tool capabilities.
 
-## Quick Start
+## 🚀 Quick Start
 
 1. **Install the engine**: ask the agent to call `tts_setup_engine` (or install manually below)
-2. **Start the engine**: Settings → Voice Settings → toggle "Start engine" on and wait until it shows "Running" (model loading takes ~15–90 s)
+2. **Start the engine**: Settings → Voice Settings → toggle "Start engine" on and wait until it shows "Running"
 3. **Add a voice**: Settings → Voice Settings → "Voice presets" → Add voice → fill in the four fields → Save
 4. **Read aloud**: click the 🔊 button next to any assistant message, or ask the agent to call `tts_speak`
 
-## Screenshots
+## 🏗️ Architecture
+
+![dsh-gsv-tts system composition & data flow](docs/images/architecture.png)
+
+> 📖 Interactive diagram: [open dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html) (zoom, focus, theme switching)
+
+**Core data flow (read-aloud path)**: user clicks 🔊 → DSH Web client → `webServer` route → the plugin extracts the message text from the session → `TTSService` streams the synthesis request → the engine returns audio chunks over SSE → `AudioStore` assembles and saves a WAV → a same-origin short link is returned to the browser for playback.
+
+| Part | Description |
+|------|-------------|
+| DSH app (DeepSeek Harness) | Plugin host: Web client, webServer, settings service |
+| dsh-gsv-tts plugin | `TTSService` (streaming synthesis) / `AudioStore` (WAV storage) / engine manager (start-stop · setup · health check) |
+| GSV-TTS-Lite local engine | Standalone Python process, FastAPI :9880, true streaming `/tts/stream` |
+
+## 📸 Screenshots
 
 ![Voice Settings panel](docs/images/settings-voice.png)
 
@@ -61,7 +75,7 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 *The "Running" state after the engine starts*
 
-## Installing the GSV-TTS-Lite Engine
+## 🔧 Installing the GSV-TTS-Lite Engine
 
 ### Option 1: Automatic (recommended)
 
@@ -80,7 +94,7 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 
 > Example audio lives in `<repo>/examples/` (`laffey.mp3`, `AnAn.ogg`) — usable as test voices.
 
-## Adding a Voice
+## 🎙️ Adding a Voice
 
 1. Open Settings → Voice Settings
 2. Under "Voice presets", click "Add voice"
@@ -98,7 +112,7 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 
 > Reference audio paths must be **local paths accessible from the engine host or reachable URLs**.
 
-## Voice Settings Reference
+## ⚙️ Voice Settings Reference
 
 | Field | Description | Default |
 |-------|-------------|---------|
@@ -112,7 +126,7 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 
 Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.
 
-## Tools
+## 🧰 Tools
 
 | Tool | Purpose |
 |------|---------|
@@ -121,14 +135,14 @@ Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings
 | `tts_health_check` | Check engine/API/Python/repo status |
 | `tts_setup_engine` | One-click GSV-TTS-Lite engine installation |
 
-## FAQ
+## ❓ FAQ
 
 - **Engine not running**: Settings → Voice Settings → toggle on (model loading takes ~15–90 s)
 - **Models missing**: the first start will warn; put the models into the `models` directory
 - **The read button says "engine not started"**: start the engine in Voice Settings first
 - **Reference audio unavailable**: use a local path accessible from the engine host or a reachable URL
 
-## Tech Stack
+## 🛠️ Tech Stack
 
 - DSH plugin framework: Cordis + `@deepseek-ai/dsh-tools`
 - Config schema: `@deepseek-ai/schemastery`
@@ -136,7 +150,7 @@ Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings
 - TTS engine: GSV-TTS-Lite 0.4.7
 - Languages: TypeScript (host) / hand-written client bundle (browser) / Python (streaming API)
 
-## Build & Publish
+## 📦 Build & Publish
 
 ```bash
 pnpm install
@@ -146,16 +160,23 @@ pnpm publish      # publish to npm (files: lib, scripts, cordis.patch.yml)
 
 Installing from GitHub runs the `prepare` script automatically; `lib/client.js` is a hand-written client bundle shipped with the repo.
 
-## Changelog
+See [docs/PUBLISHING.md](docs/PUBLISHING.md) for publishing details.
 
-- **2.3.1**: Completed npm publish metadata (`keywords`, `license`, `repository`, ...) for plugin-marketplace discovery; added GitHub Actions CI and a pre-publish manifest check; added `docs/PUBLISHING.md`
-- **2.3.0**: True-streaming client improvements and engine compatibility patch; added engine-install and voice-download guide; added UI screenshots; bilingual README rewrite with clear npm/GitHub install paths
-- **2.2.0**: Voice Settings panel (hot-applied); one-click engine switch; 🔊 read-aloud button (excludes reasoning; clear error when the engine is off); in-settings help; same-origin audio short links
-- **2.1.0**: same-origin audio via the DSH web server (no more giant data URLs); WAV header/duration fixes; `prompt_text` ASR fallback; `execFileSync` (no shell injection); `py -3` support; health-check path probing
+## 📜 Changelog
 
-## Known Limitations
+Full release history: [CHANGELOG_EN.md](CHANGELOG_EN.md).
+
+## ⚠️ Known Limitations
 
 - Playback is a clickable markdown link; inline `<audio>` playback needs a client extension (planned)
 - Generated audio lives in the system temp dir (`%TEMP%/dsh-gsv-tts`), purged on startup, capped at 200 files per session
 - `tts_setup_engine` shells out to pip/git; those tools must be available
 - Empty `promptText` relies on the engine's ASR capability (capability-probed); synthesis fails with a clear error when unsupported
+
+## 📄 License
+
+This project is open-sourced under the **MIT license**.
+
+Copyright (c) 2026 TaoruiLiu19. Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files, to deal in the Software without restriction, subject to the inclusion of the above copyright notice and this permission notice in all copies or substantial portions of the Software.
+
+The Software is provided **"AS IS"**, **without warranty of any kind, express or implied**. See the [LICENSE](LICENSE) file for the full terms.

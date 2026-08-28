@@ -38,9 +38,12 @@
     "lib",
     "scripts",
     "cordis.patch.yml",
-    "docs",
+    "docs/images",
+    "docs/PUBLISHING.md",
     "README.md",
-    "README_EN.md"
+    "README_EN.md",
+    "CHANGELOG.md",
+    "CHANGELOG_EN.md"
   ],
   "dsh": {
     "bundle": {
