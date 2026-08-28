@@ -4,6 +4,14 @@
   "meta": {
     "title": "dsh-gsv-tts 系统构成与数据流",
     "quality_profile": "showcase",
+    "legend": {
+      "entries": {
+        "frontend": { "label": "前端" },
+        "backend": { "label": "本地后端服务" },
+        "database": { "label": "存储" },
+        "external": { "label": "外部用户" }
+      }
+    },
     "repository": {
       "url": "https://github.com/TaoruiLiu19/dsh-gsv",
       "revision": "b9c221b9d57de41c5de3ce1fa3106ed3b1e21091"
@@ -38,13 +46,13 @@
     { "id": "tts-store", "from": "tts", "to": "store", "label": "拼接 WAV 落盘", "labelAt": [915, 440] },
     { "id": "store-web", "from": "store", "to": "web", "label": "同源音频短链接", "variant": "dashed", "fromSide": "left", "toSide": "bottom", "via": [[595, 610], [595, 364]], "labelAt": [700, 396] },
     { "id": "engmgr-engine", "from": "engmgr", "to": "engine", "label": "spawn / kill 进程", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[1325, 122]], "labelAt": [1180, 138] },
-    { "id": "agent-tts", "from": "agent", "to": "tts", "label": "tts_speak · tts_list_voices", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[125, 200], [915, 200]], "labelAt": [500, 216] },
+    { "id": "agent-tts", "from": "agent", "to": "tts", "label": "tts_speak · tts_list_voices（宿主内）", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "via": [[125, 200], [915, 200]], "labelAt": [500, 216] },
     { "id": "agent-engmgr", "from": "agent", "to": "engmgr", "label": "tts_health_check · tts_setup_engine", "variant": "dashed", "labelAt": [525, 108] },
     { "id": "client-settings", "from": "client", "to": "settings", "label": "保存配置（热生效）", "variant": "dashed", "labelAt": [315, 440] }
   ],
   "cards": [
-    { "dot": "cyan", "title": "朗读主链路", "items": ["🔊 按钮 / 自动朗读 → 流式合成", "音频落盘 WAV → 同源短链接播放", "排除思考内容，仅朗读文本块"] },
-    { "dot": "emerald", "title": "工具与引擎", "items": ["tts_speak / tts_list_voices / tts_health_check / tts_setup_engine", "引擎一键启停，模型加载约 15~90 秒"] },
+    { "dot": "cyan", "title": "朗读主链路（经 webServer）", "items": ["🔊 按钮 / 自动朗读 → POST /speak 路由 → 流式合成", "音频落盘 WAV → 同源短链接播放", "排除思考内容，仅朗读文本块"] },
+    { "dot": "emerald", "title": "Agent 工具（宿主内直连）", "items": ["tts_speak / tts_list_voices / tts_health_check / tts_setup_engine", "工具调用不经 webServer，由宿主进程内 tools 服务直接执行", "引擎一键启停，模型加载约 15~90 秒"] },
     { "dot": "violet", "title": "配置热生效", "items": ["设置 → 声音设置，保存即热生效（无需重启）", "音色预设四字段：名称 / 参考音频 / 提示音频 / 提示文本"] }
   ]
 }

@@ -6,6 +6,7 @@
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
 ![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
+[![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
 
 English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md)
 
@@ -53,13 +54,16 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 > 📖 交互式架构图：[打开 dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html)（支持缩放、聚焦、主题切换）
 
-**核心数据流（朗读主链路）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 路由 → 插件从会话中提取消息文本 → `TTSService` 流式请求引擎 → 引擎 SSE 逐块返回音频 → `AudioStore` 拼接 WAV 落盘 → 同源短链接回传浏览器播放。
+**两条调用路径**：
+
+- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → 插件从会话中提取消息文本 → `TTSService` 流式请求引擎 → 引擎 SSE 逐块返回音频 → `AudioStore` 拼接 WAV 落盘 → 同源短链接回传浏览器播放。
+- 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行插件逻辑，**不经 webServer HTTP 网关**——图中以虚线表示，与 🔊 按钮路径区分。
 
 | 构成 | 说明 |
 |------|------|
 | DSH 应用（DeepSeek Harness） | 插件宿主：Web 客户端、webServer、settings 服务 |
 | dsh-gsv-tts 插件 | `TTSService`（流式合成）/ `AudioStore`（WAV 落盘）/ 引擎管理（启停·安装·健康检查） |
-| GSV-TTS-Lite 本地引擎 | 独立 Python 进程，FastAPI :9880，真流式 `/tts/stream` |
+| GSV-TTS-Lite 本地引擎 | 本机 Python 进程，FastAPI :9880，真流式 `/tts/stream` |
 
 ## 📸 截图
 

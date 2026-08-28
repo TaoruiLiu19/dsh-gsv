@@ -4925,7 +4925,7 @@
         <path data-edge-from="tts" data-edge-to="store" data-edge-label="拼接 WAV 落盘" data-edge-key="6" data-edge-id="tts-store" data-composition-points="915,364;915,580" d="M 915 364 L 915 580" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         <path data-edge-from="store" data-edge-to="web" data-edge-label="同源音频短链接" data-edge-key="7" data-edge-id="store-web" data-composition-points="840,610;595,610;595,364;595,364" d="M 840 610 L 603 610 Q 595 610 595 602 L 595 364 L 595 364" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="engmgr" data-edge-to="engine" data-edge-label="spawn / kill 进程" data-edge-key="8" data-edge-id="engmgr-engine" data-composition-points="1010,122;1325,122;1325,300" d="M 1010 122 L 1317 122 Q 1325 122 1325 130 L 1325 300" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="agent" data-edge-to="tts" data-edge-label="tts_speak · tts_list_voices" data-edge-key="9" data-edge-id="agent-tts" data-composition-points="125,154;125,200;915,200;915,300" d="M 125 154 L 125 192 Q 125 200 133 200 L 907 200 Q 915 200 915 208 L 915 300" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="agent" data-edge-to="tts" data-edge-label="tts_speak · tts_list_voices（宿主内）" data-edge-key="9" data-edge-id="agent-tts" data-composition-points="125,154;125,200;915,200;915,300" d="M 125 154 L 125 192 Q 125 200 133 200 L 907 200 Q 915 200 915 208 L 915 300" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="agent" data-edge-to="engmgr" data-edge-label="tts_health_check · tts_setup_engine" data-edge-key="10" data-edge-id="agent-engmgr" data-composition-points="210,122;840,122" d="M 210 122 L 840 122" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         <path data-edge-from="client" data-edge-to="settings" data-edge-label="保存配置（热生效）" data-edge-key="11" data-edge-id="client-settings" data-composition-points="315,364;315,580" d="M 315 364 L 315 580" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
@@ -4956,12 +4956,12 @@
         <text data-detail="context" x="315" y="346" class="t-muted" font-size="8.1" text-anchor="middle">设置面板 · 🔊 朗读 · 自动播放</text>
         </g>
 
-        <g id="node-web" data-node-id="web" data-node-label="DSH webServer" tabindex="0" role="button" aria-label="Focus DSH webServer, 同源音频 · 引擎控制路由, DSH 应用（DeepSeek Harness）" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="同源音频 · 引擎控制路由" data-node-context="DSH 应用（DeepSeek Harness）">
+        <g id="node-web" data-node-id="web" data-node-label="DSH webServer" tabindex="0" role="button" aria-label="Focus DSH webServer, 同源音频 · 引擎控制路由, DSH 应用（DeepSeek Harness）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="同源音频 · 引擎控制路由" data-node-context="DSH 应用（DeepSeek Harness）">
           <title>DSH webServer · 同源音频 · 引擎控制路由 · DSH 应用（DeepSeek Harness）</title>
           <rect x="520" y="300" width="150" height="64" rx="6" class="c-mask"/>
-          <rect x="520" y="300" width="150" height="64" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(526 306) scale(0.6875)">
-            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          <rect x="520" y="300" width="150" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(526 306) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-detail-anchor x="595" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">DSH webServer</text>
         <text data-detail="context" x="595" y="346" class="t-muted" font-size="9" text-anchor="middle">同源音频 · 引擎控制路由</text>
@@ -4979,16 +4979,15 @@
         <text data-detail="fine" x="915" y="356" class="t-backend" font-size="7" text-anchor="middle">dsh-gsv-tts 插件</text>
         </g>
 
-        <g id="node-engine" data-node-id="engine" data-node-label="GSV-TTS-Lite 引擎" tabindex="0" role="button" aria-label="Focus GSV-TTS-Lite 引擎, FastAPI :9880 · 真流式, GSV-TTS-Lite 本地引擎" aria-pressed="false" data-node-kind="external" data-node-sublabel="FastAPI :9880 · 真流式" data-node-context="GSV-TTS-Lite 本地引擎">
-          <title>GSV-TTS-Lite 引擎 · FastAPI :9880 · 真流式 · GSV-TTS-Lite 本地引擎</title>
+        <g id="node-engine" data-node-id="engine" data-node-label="GSV-TTS-Lite 引擎" tabindex="0" role="button" aria-label="Focus GSV-TTS-Lite 引擎, 本地 Python 进程 · FastAPI :9880, GSV-TTS-Lite 本地引擎" aria-pressed="false" data-node-kind="backend" data-node-sublabel="本地 Python 进程 · FastAPI :9880" data-node-context="GSV-TTS-Lite 本地引擎">
+          <title>GSV-TTS-Lite 引擎 · 本地 Python 进程 · FastAPI :9880 · GSV-TTS-Lite 本地引擎</title>
           <rect x="1240" y="300" width="170" height="64" rx="6" class="c-mask"/>
-          <rect x="1240" y="300" width="170" height="64" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1246 306) scale(0.6875)">
-            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
-            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          <rect x="1240" y="300" width="170" height="64" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1246 306) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
           <text data-detail-anchor x="1325" y="330" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">GSV-TTS-Lite 引擎</text>
-        <text data-detail="context" x="1325" y="346" class="t-muted" font-size="9" text-anchor="middle">FastAPI :9880 · 真流式</text>
+        <text data-detail="context" x="1325" y="346" class="t-muted" font-size="8.4" text-anchor="middle">本地 Python 进程 · FastAPI :9880</text>
         </g>
 
         <g id="node-settings" data-node-id="settings" data-node-label="DSH settings" tabindex="0" role="button" aria-label="Focus DSH settings, settings.yaml · 热生效, DSH 应用（DeepSeek Harness）" aria-pressed="false" data-node-kind="database" data-node-sublabel="settings.yaml · 热生效" data-node-context="DSH 应用（DeepSeek Harness）">
@@ -5088,9 +5087,9 @@
           <rect x="1134.2" y="128" width="91.6" height="14" rx="3" class="c-mask"/>
           <text x="1180" y="138" class="t-messagebus" font-size="8" text-anchor="middle">spawn / kill 进程</text>
         </g>
-        <g data-detail="context" data-edge-from="agent" data-edge-to="tts" data-edge-label="tts_speak · tts_list_voices" data-edge-key="9" data-edge-id="agent-tts">
-          <rect x="430.2" y="206" width="139.6" height="14" rx="3" class="c-mask"/>
-          <text x="500" y="216" class="t-messagebus" font-size="8" text-anchor="middle">tts_speak · tts_list_voices</text>
+        <g data-detail="context" data-edge-from="agent" data-edge-to="tts" data-edge-label="tts_speak · tts_list_voices（宿主内）" data-edge-key="9" data-edge-id="agent-tts">
+          <rect x="406.2" y="206" width="187.6" height="14" rx="3" class="c-mask"/>
+          <text x="500" y="216" class="t-messagebus" font-size="8" text-anchor="middle">tts_speak · tts_list_voices（宿主内）</text>
         </g>
         <g data-detail="context" data-edge-from="agent" data-edge-to="engmgr" data-edge-label="tts_health_check · tts_setup_engine" data-edge-key="10" data-edge-id="agent-engmgr">
           <rect x="436" y="98" width="178" height="14" rx="3" class="c-mask"/>
@@ -5104,25 +5103,21 @@
         <!-- Legend -->
         <g data-legend data-legend-bridge>
           <text x="40" y="692" class="t-primary" font-size="12" font-weight="650">Legend</text>
-          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="Frontend" data-legend-x="40" data-legend-baseline="712" data-legend-width="83">
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="前端" data-legend-x="40" data-legend-baseline="712" data-legend-width="63">
             <rect x="40" y="703" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
-            <text x="62" y="712" class="t-muted" font-size="10" font-weight="500">Frontend</text>
+            <text x="62" y="712" class="t-muted" font-size="10" font-weight="500">前端</text>
           </g>
-          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Backend" data-legend-x="145" data-legend-baseline="712" data-legend-width="78">
-            <rect x="145" y="703" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
-            <text x="167" y="712" class="t-muted" font-size="10" font-weight="500">Backend</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="本地后端服务" data-legend-x="125" data-legend-baseline="712" data-legend-width="103">
+            <rect x="125" y="703" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="147" y="712" class="t-muted" font-size="10" font-weight="500">本地后端服务</text>
           </g>
-          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="Database" data-legend-x="245" data-legend-baseline="712" data-legend-width="83">
-            <rect x="245" y="703" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
-            <text x="267" y="712" class="t-muted" font-size="10" font-weight="500">Database</text>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="存储" data-legend-x="250" data-legend-baseline="712" data-legend-width="63">
+            <rect x="250" y="703" width="16" height="10" rx="2.5" class="c-database" stroke-width="1"/>
+            <text x="272" y="712" class="t-muted" font-size="10" font-weight="500">存储</text>
           </g>
-          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="Cloud" data-legend-x="350" data-legend-baseline="712" data-legend-width="68">
-            <rect x="350" y="703" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
-            <text x="372" y="712" class="t-muted" font-size="10" font-weight="500">Cloud</text>
-          </g>
-          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="External" data-legend-x="440" data-legend-baseline="712" data-legend-width="83">
-            <rect x="440" y="703" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
-            <text x="462" y="712" class="t-muted" font-size="10" font-weight="500">External</text>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部用户" data-legend-x="335" data-legend-baseline="712" data-legend-width="83">
+            <rect x="335" y="703" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="357" y="712" class="t-muted" font-size="10" font-weight="500">外部用户</text>
           </g>
         </g>
       </svg>
@@ -5311,10 +5306,10 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot cyan"></div>
-          <h3>朗读主链路</h3>
+          <h3>朗读主链路（经 webServer）</h3>
         </div>
         <ul>
-          <li>&bull; 🔊 按钮 / 自动朗读 → 流式合成</li>
+          <li>&bull; 🔊 按钮 / 自动朗读 → POST /speak 路由 → 流式合成</li>
           <li>&bull; 音频落盘 WAV → 同源短链接播放</li>
           <li>&bull; 排除思考内容，仅朗读文本块</li>
         </ul>
@@ -5323,10 +5318,11 @@
       <div class="card">
         <div class="card-header">
           <div class="card-dot emerald"></div>
-          <h3>工具与引擎</h3>
+          <h3>Agent 工具（宿主内直连）</h3>
         </div>
         <ul>
           <li>&bull; tts_speak / tts_list_voices / tts_health_check / tts_setup_engine</li>
+          <li>&bull; 工具调用不经 webServer，由宿主进程内 tools 服务直接执行</li>
           <li>&bull; 引擎一键启停，模型加载约 15~90 秒</li>
         </ul>
       </div>

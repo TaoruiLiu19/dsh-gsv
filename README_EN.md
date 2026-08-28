@@ -6,6 +6,7 @@
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
 ![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
+[![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
 
 中文 README: [README.md](README.md) · Changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
@@ -53,13 +54,16 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 > 📖 Interactive diagram: [open dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html) (zoom, focus, theme switching)
 
-**Core data flow (read-aloud path)**: user clicks 🔊 → DSH Web client → `webServer` route → the plugin extracts the message text from the session → `TTSService` streams the synthesis request → the engine returns audio chunks over SSE → `AudioStore` assembles and saves a WAV → a same-origin short link is returned to the browser for playback.
+**Two call paths**:
+
+- 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → the plugin extracts the message text from the session → `TTSService` streams the synthesis request → the engine returns audio chunks over SSE → `AudioStore` assembles and saves a WAV → a same-origin short link is returned to the browser for playback.
+- 🤖 **Agent tool calls (in-process, direct)**: when the agent calls `tts_speak` and friends, the host's tools service executes the plugin logic **directly in-process — no webServer HTTP gateway involved**. Shown as dashed lines to distinguish from the 🔊 button path.
 
 | Part | Description |
 |------|-------------|
 | DSH app (DeepSeek Harness) | Plugin host: Web client, webServer, settings service |
 | dsh-gsv-tts plugin | `TTSService` (streaming synthesis) / `AudioStore` (WAV storage) / engine manager (start-stop · setup · health check) |
-| GSV-TTS-Lite local engine | Standalone Python process, FastAPI :9880, true streaming `/tts/stream` |
+| GSV-TTS-Lite local engine | Local Python process, FastAPI :9880, true streaming `/tts/stream` |
 
 ## 📸 Screenshots
 
