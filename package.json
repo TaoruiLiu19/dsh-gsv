@@ -61,6 +61,8 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
+    "verify": "node scripts/verify-manifest.mjs",
+    "prepublishOnly": "npm run verify",
     "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\""
   },
   "peerDependencies": {
