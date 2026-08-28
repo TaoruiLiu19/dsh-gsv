@@ -1,5 +1,10 @@
 # dsh-gsv-tts
 
+![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
+![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
+![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
+![License](https://img.shields.io/npm/l/dsh-gsv-tts)
+
 A DSH (DeepSeek Harness) plugin that integrates the [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) local TTS engine: voice cloning, streaming synthesis, auto-read, one-click read-aloud, and one-click engine control.
 
 中文 README: [README.md](README.md)
@@ -143,6 +148,8 @@ Installing from GitHub runs the `prepare` script automatically; `lib/client.js` 
 
 ## Changelog
 
+- **2.3.1**: Completed npm publish metadata (`keywords`, `license`, `repository`, ...) for plugin-marketplace discovery; added GitHub Actions CI and a pre-publish manifest check; added `docs/PUBLISHING.md`
+- **2.3.0**: True-streaming client improvements and engine compatibility patch; added engine-install and voice-download guide; added UI screenshots; bilingual README rewrite with clear npm/GitHub install paths
 - **2.2.0**: Voice Settings panel (hot-applied); one-click engine switch; 🔊 read-aloud button (excludes reasoning; clear error when the engine is off); in-settings help; same-origin audio short links
 - **2.1.0**: same-origin audio via the DSH web server (no more giant data URLs); WAV header/duration fixes; `prompt_text` ASR fallback; `execFileSync` (no shell injection); `py -3` support; health-check path probing
 

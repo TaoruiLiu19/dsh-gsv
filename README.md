@@ -1,5 +1,10 @@
 # dsh-gsv-tts
 
+![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
+![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
+![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
+![License](https://img.shields.io/npm/l/dsh-gsv-tts)
+
 DSH（DeepSeek Harness）插件，接入 [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) 本地 TTS 服务：音色克隆、流式合成、自动朗读、一键朗读、引擎一键启停。
 
 English README: [README_EN.md](README_EN.md)
@@ -143,6 +148,8 @@ pnpm publish      # 发布到 npm（files: lib, scripts, cordis.patch.yml）
 
 ## 变更记录
 
+- **2.3.1**：补全 npm 发布元数据（`keywords`、`license`、`repository` 等）以支持插件市场收录；新增 GitHub Actions CI 与发布前 manifest 校验；新增 `docs/PUBLISHING.md` 发布指南
+- **2.3.0**：真流式客户端改进与引擎兼容补丁；补充引擎安装与语音下载指南；新增界面截图；README 双语重写，明确 npm / GitHub 双通道安装
 - **2.2.0**：声音设置面板（保存即热生效）；引擎一键启停开关；🔊 朗读按钮（排除思考，引擎未启动给出原因）；设置内帮助文档；音频同源短链接
 - **2.1.0**：音频改由 DSH Web 服务同源提供（不再用巨型 data URL）；WAV 头/时长计算修复；`prompt_text` 留空 ASR 兜底；`execFileSync` 消除命令注入；`py -3` 支持；健康检查路径探测
 
