@@ -1,3 +1,10 @@
+/** 单次合成（tts_speak 工具 / 短文本）的清洗后长度上限。 */
+export const MAX_TEXT_LENGTH = 6000;
+/** 分段合成（朗读按钮 / 自动朗读）的清洗后长度上限（分段本身按句切分）。 */
+export const MAX_SEGMENTED_TEXT_LENGTH = 30000;
+/** 单段最大字符数（超过则按句打包时硬切）。 */
+export const SEGMENT_MAX_CHARS = 800;
+
 export class TextCleaner {
   static clean(text: string): string {
     return text
@@ -13,6 +20,10 @@ export class TextCleaner {
       .replace(/^>\s?/gm, '')
       .replace(/^\s*[-*+]\s+/gm, '')
       .replace(/^\s*\d+[.)]\s+/gm, '')
+      // 表格：先删数据行（| a | b |），再兜底删分隔行（|---|:--|）——
+      // 顺序不能反：分隔行也会被数据行正则命中，反过来会漏掉无前导竖线的分隔行
+      .replace(/^\s*\|.*\|\s*$/gm, '')
+      .replace(/^\s*\|?[\s\-|:]+\|?\s*$/gm, '')
       // 强调 / 删除线（TTS 会把星号读成 "星号"）
       .replace(/\*\*([^*]+)\*\*/g, '$1')
       .replace(/(^|\s)\*([^*\n]+)\*(?=\s|$)/g, '$1$2')

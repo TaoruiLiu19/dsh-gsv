@@ -2,6 +2,28 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.5.0] - 2026-08-29
+
+### 朗读净化补全（P0-1）
+- 过滤 markdown 表格（数据行与分隔行），只读表格外的正文
+- 超长文本保护：`tts_speak` 单段上限 6000 字符，朗读/自动朗读分段上限 30000 字符，超限给出友好提示
+- 空文本判断与合成口径统一：清洗后为空（只有代码/链接/表格）的回复返回明确提示
+- 新增单元测试（`npm test`，基于 node:test，零新增依赖）：净化器与句切分器
+
+### 渐进分段播放（P1-1）
+- 服务端新增 `TTSService.synthesizeSegments`：按句切分（中文句末标点、顿号 + 英文句点，单段 ≤ 800 字）逐段流式合成，段间 0 静音
+- `/dsh-gsv-tts/speak` 返回可顺序播放的 URL 队列（`segments`），兼容旧单 URL 字段
+- 前端播放器按 `<audio>` ended 事件自动续播下一段——长回复不再等整段合成完才出声
+
+### 朗读控件（P1-2）
+- 朗读按钮新增 暂停 / 继续 / 停止 三键，作用于整个分段队列（记录当前段 + 段内时间）
+- 显示朗读进度（已播 / 总时长 + 段序号）
+- 高亮正在朗读的那条消息（呼吸边框）
+
+### 自动朗读打断（P0-2）
+- 自动朗读改为"通知 → 前端按需合成播放"：服务端递增 seq，前端轮询感知新回复
+- 新回复到来时默认打断当前朗读（barge-in）；设置中可关闭 `interruptOnNew`，朗读中跳过新回复避免叠音
+
 ## [2.3.2] - 2026-08-28
 
 - 对齐 `@deepseek-ai/dsh-tools` peer 依赖范围（`^0.1.0-rc.6`），与 lockfile 一致
@@ -43,6 +65,7 @@
 - 首个正式版本：接入 GSV-TTS-Lite 本地 TTS 引擎
 - 提供 `tts_speak` / `tts_list_voices` / `tts_health_check` / `tts_setup_engine` 四个工具
 
+[2.5.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.2...v2.5.0
 [2.3.2]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.0...v2.3.1
 [2.3.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.2.0...v2.3.0

@@ -1,20 +1,67 @@
-import { TextCleaner } from './text-cleaner.js';
+import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS } from './text-cleaner.js';
+import { splitIntoSegments } from './segmenter.js';
 import type { AudioChunk, AudioStore } from './audio-store.js';
-import type { Config, TTSStreamRequest, SynthesizeResult, VoicePreset } from './types.js';
+import type {
+  Config,
+  TTSStreamRequest,
+  SynthesizeResult,
+  SynthesizeSegmentsResult,
+  TTSAudioSegment,
+  VoicePreset,
+} from './types.js';
+
+let fileCounter = 0;
 
 export class TTSService {
   constructor(private config: Config, private audioStore: AudioStore) {}
 
+  /** 单次合成整段（tts_speak 工具路径）：清洗 → 守卫 → 流式收齐 → 落盘为单个 wav。 */
   async synthesize(text: string, voice?: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
     const cleanText = TextCleaner.clean(text);
+    this.assertText(cleanText, voice);
+    if (cleanText.length > MAX_TEXT_LENGTH) {
+      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_TEXT_LENGTH}），请分段朗读`);
+    }
+    return this.synthesizeOne(cleanText, voice!, signal);
+  }
+
+  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按句切分后逐段流式合成，段间 0 静音拼接。
+   *  某段失败时不再中断：返回已成功的段并附 error 说明，前端可先播已就绪部分。 */
+  async synthesizeSegments(text: string, voice?: VoicePreset, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
+    const cleanText = TextCleaner.clean(text);
+    this.assertText(cleanText, voice);
+    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
+      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
+    }
+    const parts = splitIntoSegments(cleanText, SEGMENT_MAX_CHARS);
+    const segments: TTSAudioSegment[] = [];
+    let totalLen = 0;
+    let error: string | undefined;
+    for (let i = 0; i < parts.length; i++) {
+      try {
+        const r = await this.synthesizeOne(parts[i], voice!, signal);
+        segments.push({ url: r.audioUrl, duration: r.audioLen });
+        totalLen += r.audioLen;
+      } catch (e) {
+        if (signal?.aborted) throw e; // 取消/超时：整次失败，丢弃半成品
+        error = `第 ${i + 1}/${parts.length} 段合成失败：${String((e as Error)?.message ?? e)}`;
+        break;
+      }
+    }
+    return { segments, totalLen, error };
+  }
+
+  private assertText(cleanText: string, voice?: VoicePreset): void {
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (!voice) throw new Error('未指定音色预设');
     if (!voice.speakerAudioPath) throw new Error(`音色 "${voice.name}" 缺少 speakerAudioPath（参考音频路径）`);
     if (!voice.promptAudioPath) throw new Error(`音色 "${voice.name}" 缺少 promptAudioPath（提示音频路径）`);
     // promptText 留空时交给服务端：引擎支持 ASR 则自动转写，否则返回明确错误
+  }
 
+  private async synthesizeOne(text: string, voice: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
     const body: TTSStreamRequest = {
-      text: cleanText,
+      text,
       speaker_audio: voice.speakerAudioPath,
       prompt_audio: voice.promptAudioPath,
       prompt_text: voice.promptText,
@@ -98,7 +145,7 @@ export class TTSService {
 
     if (chunks.length === 0) throw new Error('未收到任何音频数据');
 
-    const saved = this.audioStore.save(`tts_${Date.now()}.wav`, chunks);
+    const saved = this.audioStore.save(`tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`, chunks);
     return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
   }
 }

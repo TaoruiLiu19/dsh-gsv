@@ -16,8 +16,8 @@
 
 - 🎙️ **Voice cloning**: clone a target voice from reference audio; selectable by name in `tts_speak`
 - ⚡ **True streaming synthesis**: SSE chunk-by-chunk synthesis — the first chunk is pushed as soon as it arrives
-- 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded)
-- 🔁 **Auto-read**: automatically synthesize assistant replies when enabled
+- 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **split into sentence segments and played progressively**, with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
+- 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart)
 - 🚀 **One-click engine control**: start/stop the local GSV-TTS-Lite engine (model loading ~15–90 s)
 - 🛠️ **One-click engine setup**: `tts_setup_engine` auto-detects Python, installs deps, clones the repo, and starts the service
@@ -126,6 +126,7 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 | `timeout` | Request timeout (ms) | `30000` |
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
+| `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
 | `voices` | Voice preset list | empty |
 
 Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.

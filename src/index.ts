@@ -5,6 +5,7 @@ import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
 import { AudioStore } from './audio-store.js';
 import { EngineManager } from './engine-manager.js';
+import { TextCleaner, MAX_SEGMENTED_TEXT_LENGTH } from './text-cleaner.js';
 import type { Config as PluginConfig, HealthCheckResult, SetupResult } from './types.js';
 
 export const name = 'dsh-gsv-tts';
@@ -21,6 +22,7 @@ export const Config: any = Schema.object({
   })).default([]).description('音色预设列表，可在设置中自定义'),
   defaultVoice: Schema.string().description('默认音色名称（留空则使用列表第一个）').default(''),
   autoPlay: Schema.boolean().default(false).description('是否自动朗读助手回复'),
+  interruptOnNew: Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）'),
   timeout: Schema.number().default(30000).description('请求超时时间（毫秒）'),
   installDir: Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录'),
 });
@@ -34,6 +36,10 @@ export function apply(ctx: any, config: PluginConfig) {
   let setup = new EngineSetup(current.apiUrl, current.installDir);
   // 引擎进程管理：单实例跨配置热更新存活（避免 reconfigure 丢失子进程引用）
   const engineManager = new EngineManager();
+
+  // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
+  // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。
+  const autoPlay = { seq: 0, text: null as string | null };
 
   const reconfigure = (next: PluginConfig) => {
     current = next;
@@ -105,6 +111,74 @@ export function apply(ctx: any, config: PluginConfig) {
     },
   }));
 
+  // 自动朗读轮询：前端带着上次看到的 seq 来，服务端返回当前 seq 与新文本
+  // （text 仅在 seq 前进时有意义；无新回复时返回当前 seq，前端据此判断无变化）。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/autoplay/poll',
+    handler: async (req: any, res: any) => {
+      try {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        const { sinceSeq } = JSON.parse(raw || '{}');
+        json(res, 200, {
+          seq: autoPlay.seq,
+          text: typeof sinceSeq === 'number' && autoPlay.seq > sinceSeq ? autoPlay.text : null,
+        });
+      } catch {
+        json(res, 200, { seq: autoPlay.seq, text: null });
+      }
+    },
+  }));
+
+  // 自动朗读合成：按 seq 取暂存文本，分段合成后返回与 /speak 相同的队列结构。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/autoplay/speak',
+    handler: async (req: any, res: any) => {
+      try {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        const { seq } = JSON.parse(raw || '{}');
+        if (seq !== autoPlay.seq || !autoPlay.text) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: '没有可朗读的新回复' }));
+          return;
+        }
+        const preset = voiceManager.get();
+        if (!preset) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: '未配置音色' }));
+          return;
+        }
+        try {
+          const r = await tts.synthesizeSegments(autoPlay.text, preset);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            segments: r.segments,
+            audioUrl: r.segments[0]?.url ?? null,
+            audioLen: r.totalLen,
+            voiceUsed: preset.name,
+            error: r.error,
+          }));
+        } catch (e: any) {
+          // 引擎未启动是最常见失败：给出明确原因
+          const engine = await engineManager.status();
+          if (!engine.running) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: '语音引擎未启动，请到 设置 → 引擎 打开开关' }));
+            return;
+          }
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+        }
+      } catch (e: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+      }
+    },
+  }));
+
   // 朗读按钮调用：按 sessionId+messageId 取助手消息文本（不含思考），合成并返回音频 URL
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
@@ -139,14 +213,21 @@ export function apply(ctx: any, config: PluginConfig) {
           res.end(JSON.stringify({ message: '未找到消息' }));
           return;
         }
-        // 只取文本块（type === 'text'），排除思考/工具调用等
-        const text = content
+        // 只取文本块（type === 'text'），排除思考/工具调用等；空文本判断用清洗后文本，
+        // 与合成口径一致——只有代码块/链接/表格的回复应给友好提示，而不是 404
+        const rawText = content
           .filter((b) => b.type === 'text')
           .map((b) => b.text ?? '')
           .join('');
-        if (!text.trim()) {
+        const text = TextCleaner.clean(rawText);
+        if (!text) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '该消息没有可朗读的文本' }));
+          res.end(JSON.stringify({ message: '该消息没有可朗读的文本（可能只包含代码/链接/表格等）' }));
+          return;
+        }
+        if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: `文本过长（${text.length} 字符），请分段朗读` }));
           return;
         }
         const preset = voiceManager.get();
@@ -156,9 +237,16 @@ export function apply(ctx: any, config: PluginConfig) {
           return;
         }
         try {
-          const r = await tts.synthesize(text, preset);
+          // 渐进分段合成：按句切分逐段落地，返回可顺序播放的 URL 队列
+          const r = await tts.synthesizeSegments(text, preset);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: preset.name }));
+          res.end(JSON.stringify({
+            segments: r.segments,
+            audioUrl: r.segments[0]?.url ?? null,
+            audioLen: r.totalLen,
+            voiceUsed: preset.name,
+            error: r.error,
+          }));
         } catch (e: any) {
           // 引擎未启动是最常见失败：给出明确原因
           const engine = await engineManager.status();
@@ -355,20 +443,22 @@ export function apply(ctx: any, config: PluginConfig) {
   ctx.tools.register(setupEngineTool);
 
   // ─── 自动朗读：监听 session/event（常驻监听，是否朗读由运行时配置决定，支持设置热切换） ───
-  ctx.on('session/event', (session: unknown, event: { type: string; data: { message: { content: Array<{ type: string; text?: string }> } } }) => {
+  // 服务端只做"新回复通知"（递增 seq 并暂存清洗后文本），由前端轮询触发合成与播放，
+  // 打断/防重叠（barge-in）在前端播放层执行，受 interruptOnNew 开关控制。
+  ctx.on('session/event', (session: unknown, event: { type: string; data: { message: { id?: string; content: Array<{ type: string; text?: string }> } } }) => {
     if (!current.autoPlay) return;
     if (event.type !== 'assistant/message') return;
-    const text = (event.data.message.content || [])
+    const messageId = event.data.message?.id;
+    if (!messageId) return;
+    const rawText = (event.data.message.content || [])
       .filter((b) => b.type === 'text')
       .map((b) => b.text || '')
       .join('');
-    if (text) {
-      const preset = voiceManager.get();
-      if (preset) {
-        tts.synthesize(text, preset).catch((e: unknown) => {
-          ctx.logger?.warn?.('auto TTS fail', e);
-        });
-      }
-    }
+    const text = TextCleaner.clean(rawText);
+    if (!text || text.length > MAX_SEGMENTED_TEXT_LENGTH) return;
+    if (text === autoPlay.text) return; // 同一内容重复事件不重复通知
+    autoPlay.seq += 1;
+    autoPlay.text = text;
+    ctx.logger?.info?.('dsh-gsv-tts 自动朗读: 新回复已就绪 (seq=%d)', autoPlay.seq);
   });
 }

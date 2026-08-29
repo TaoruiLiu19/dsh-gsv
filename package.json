@@ -1,6 +1,6 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "2.3.3",
+  "version": "2.5.0",
   "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, engine setup assistant, read-aloud button, and settings panel",
   "keywords": [
     "dsh-plugin",
@@ -64,6 +64,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
+    "test": "npm run build && node --test tests/",
     "verify": "node scripts/verify-manifest.mjs",
     "prepublishOnly": "npm run verify",
     "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\""
