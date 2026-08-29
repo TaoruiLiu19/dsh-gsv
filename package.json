@@ -64,7 +64,7 @@
   "scripts": {
     "build": "tsc",
     "prepare": "tsc",
-    "test": "npm run build && node --test tests/",
+    "test": "node --test \"tests/*.test.mjs\"",
     "verify": "node scripts/verify-manifest.mjs",
     "prepublishOnly": "npm run verify",
     "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\""

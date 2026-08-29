@@ -71,3 +71,10 @@ test('默认上限为 800', () => {
   const segs = splitIntoSegments(text);
   assert.ok(segs.every((s) => s.length <= 800));
 });
+
+test('英文缩写（e.g. / Dr. ）不被分句拆散', () => {
+  const segs = splitIntoSegments('Please see e.g. the examples below. Dr. Smith ran.');
+  assert.equal(segs.length, 1, '短文本不应被切分');
+  assert.ok(segs[0].includes('e.g. the'), '缩写 e.g. 不应被拆开：' + segs[0]);
+  assert.ok(segs[0].includes('Dr. Smith'), '缩写 Dr. 不应被拆开：' + segs[0]);
+});

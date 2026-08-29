@@ -8,6 +8,10 @@
  */
 
 const SENT = '\u0000';
+/** 缩写句点的暂存占位：分句时忽略这些句点，避免把 e.g. / Mr. 拆散。 */
+const DOT_HOLD = '\u0001';
+/** 常见英文缩写：其后紧跟空白/标点时，句点不作为句末边界。 */
+const ABBR = /\b(?:e\.g|i\.e|Mr|Mrs|Ms|Dr|St|Mt|Sr|Jr|vs|etc|approx|Fig|No|Dept|Jan|Feb|Mar|Apr|Aug|Sept|Sep|Oct|Nov|Dec)\.(?=[\s,;:)])/g;
 
 /** 句末标点（CJK 与半角）后插入切分哨兵。 */
 function markSentenceBoundaries(text: string): string {
@@ -21,9 +25,11 @@ export function splitIntoSegments(text: string, maxChars = 800): string[] {
   const t = (text ?? '').trim();
   if (!t) return [];
 
-  const atoms = markSentenceBoundaries(t)
+  // 先保护缩写句点（不参与分句），分句完成后再还原
+  const held = t.replace(ABBR, (m) => m.replace(/\.$/, DOT_HOLD));
+  const atoms = markSentenceBoundaries(held)
     .split(SENT)
-    .map((s) => s.trim())
+    .map((s) => s.replace(new RegExp(DOT_HOLD, 'g'), '.').trim())
     .filter(Boolean);
 
   const segments: string[] = [];

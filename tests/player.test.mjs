@@ -135,3 +135,25 @@ test('空队列与停止后的进度防御', async () => {
   assert.equal(idle.elapsed, 0);
   assert.equal(idle.total, 0);
 });
+
+test('backlog：不打断时新回复入队，当前队列播完自动补读', async () => {
+  await loadPlayer();
+  player.play('m1', [{ url: 'a1', duration: 10 }]);
+  player.enqueue('m2', [{ url: 'b1', duration: 5 }]);
+  assert.equal(player.isActive('m1'), true);
+  assert.equal(player.isActive('m2'), false, 'm2 应先排队');
+  FakeAudio.instances[0].emit('ended');
+  assert.equal(player.isActive('m2'), true, 'm1 播完应自动补读 m2');
+  assert.equal(FakeAudio.instances[1].url, 'b1');
+});
+
+test('play（barge-in）会清空 backlog', async () => {
+  await loadPlayer();
+  player.play('m1', [{ url: 'a1', duration: 10 }]);
+  player.enqueue('m2', [{ url: 'b1', duration: 5 }]);
+  player.play('m3', [{ url: 'c1', duration: 4 }]); // 打断并清空 backlog
+  FakeAudio.instances[0].emit('ended'); // 旧音频的 ended 应被忽略
+  assert.equal(player.isActive('m1'), false);
+  assert.equal(player.isActive('m2'), false, 'backlog 应被清空');
+  assert.equal(player.isActive('m3'), true);
+});
