@@ -1,6 +1,6 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "2.6.0",
+  "version": "3.0.0",
   "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, engine setup assistant, read-aloud button, and settings panel",
   "keywords": [
     "dsh-plugin",
@@ -38,6 +38,8 @@
     "lib",
     "scripts",
     "cordis.patch.yml",
+    "docs/voices",
+    "docs/voices.json",
     "docs/images",
     "docs/PUBLISHING.md",
     "README.md",

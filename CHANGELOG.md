@@ -2,6 +2,17 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [3.0.0] - 开发中
+
+### 音色 Registry 一键安装（P2）
+- 音色市场：包内离线清单（`docs/voices.json`）或自定义远端源（`voiceRegistryUrl`，服务端拉取带 no-cache）
+- 信任规则：信任 = 随插件发版内置——仅包内清单且 `trusted` 为真免确认；**任何远端清单一律两阶段确认**（即便自报 trusted），阶段 1 不下载任何字节
+- 三工具 `tts_voice_registry` / `tts_voice_install` / `tts_voice_remove` + 同源 HTTP 路由 `registry/{list,install,remove}`，共享核心
+- 安装：下载 → sha256 强校验 → 大小/后缀白名单 → 原子落盘 `<installDir>/voices/<id>/` → 写回 `Config.voices`（id + source 账本），失败不留半成品、不写配置
+- 只读托管：`source:'registry'` 音色在设置面板只读、仅可卸载；卸载按 id 精确匹配，自定义音色拒绝删，`defaultVoice` 悬空一并清空
+- 面板新增"音色市场"卡：来源/信任徽标、试听（复用 /preview）、两阶段确认安装、卸载删除文件确认
+- 单测并入 CI：清单校验、信任边界、原子写、卸载护栏、路径穿越
+
 ## [2.6.0] - 2026-08-29
 
 ### 设置面板增强（P1-3）

@@ -3,6 +3,10 @@ export interface VoicePreset {
   speakerAudioPath: string;
   promptAudioPath: string;
   promptText: string;
+  /** 注册表来源 id（source === 'registry' 时必填），卸载/更新按它精确匹配 */
+  id?: string;
+  /** 音色来源：用户自建（全量编辑）或注册表安装（只读托管，仅可卸载） */
+  source?: 'user' | 'registry';
 }
 
 export interface Config {
@@ -14,6 +18,30 @@ export interface Config {
   interruptOnNew: boolean;
   timeout: number;
   installDir: string;
+  /** 音色市场远端清单地址；留空（''）使用包内 docs/voices.json（离线） */
+  voiceRegistryUrl: string;
+}
+
+/** 注册表单个音色条目（清单中的原始形态，URL 为远端直链）。 */
+export interface VoiceRegistryPkg {
+  id: string;
+  name: string;
+  author?: string;
+  license: string;
+  speaker: string;
+  prompt: string;
+  promptText: string;
+  sizeBytes: number;
+  sha256: { speaker: string; prompt: string };
+}
+
+/** 音色市场清单。 */
+export interface VoiceRegistry {
+  schema: number;
+  version: string;
+  /** 信任标志：仅对包内离线清单生效；远端清单一律不可自证信任 */
+  trusted?: boolean;
+  voices: VoiceRegistryPkg[];
 }
 
 export interface TTSStreamRequest {

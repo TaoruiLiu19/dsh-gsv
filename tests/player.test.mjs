@@ -41,7 +41,8 @@ async function loadPlayer() {
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
   const requireStub = (name) => {
     const map = {
-      'react': {},
+      // react.Component/createElement 供 GsvErrorBoundary 类定义在模块加载时使用
+      'react': { Component: class {}, createElement: () => null },
       'react/jsx-runtime': {},
       '@deepseek-ai/dsh-client-ui-primitives': {},
     };

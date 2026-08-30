@@ -2,6 +2,17 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - in development
+
+### Voice Registry one-click install (P2)
+- Voice market: bundled offline manifest (`docs/voices.json`) or a custom remote source (`voiceRegistryUrl`, fetched server-side with no-cache)
+- Trust rule: trust = shipped with the plugin — only the bundled manifest with `trusted: true` installs without confirmation; **any remote manifest requires two-phase confirmation** (even if it self-reports trusted), and phase 1 downloads nothing
+- Three tools `tts_voice_registry` / `tts_voice_install` / `tts_voice_remove` plus same-origin HTTP routes `registry/{list,install,remove}`, sharing one core
+- Install: download → sha256 verification → size/extension whitelist → atomic staging under `<installDir>/voices/<id>/` → write back to `Config.voices` (id + source bookkeeping); failures leave no partial files and never touch config
+- Read-only managed voices: `source:'registry'` entries are read-only in the panel (uninstall only); removal matches by id, refuses custom voices, and clears a dangling `defaultVoice`
+- New "Voice Market" card in the panel: source/trust badge, preview (reuses /preview), two-phase confirmed install, delete-files confirm on uninstall
+- Unit tests wired into CI: manifest validation, trust boundaries, atomic writes, uninstall guards, path traversal
+
 ## [2.6.0] - 2026-08-29
 
 ### Settings panel enhancements (P1-3)

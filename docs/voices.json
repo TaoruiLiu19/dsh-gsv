@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "version": "1.0.3",
+  "trusted": true,
+  "voices": [
+    {
+      "id": "cn-changhenge-female",
+      "name": "中文女声·长恨歌",
+      "author": "用户提供 (女声无BGM朗读《长恨歌》)",
+      "license": "用户提供素材 — 分发前需确认授权",
+      "speaker": "https://raw.githubusercontent.com/TaoruiLiu19/dsh-gsv/main/docs/voices/cn-changhenge-female.mp3",
+      "prompt": "https://raw.githubusercontent.com/TaoruiLiu19/dsh-gsv/main/docs/voices/cn-changhenge-female.mp3",
+      "promptText": "汉皇重色思倾国，御宇多年求不得。杨家有女初长成，养在深闺人未识。",
+      "sizeBytes": 644223,
+      "sha256": {
+        "speaker": "1586061f343434df9ffd7aa48d99f47c9ceac53cca8d3e2b805bce7d23df063d",
+        "prompt": "1586061f343434df9ffd7aa48d99f47c9ceac53cca8d3e2b805bce7d23df063d"
+      }
+    },
+    {
+      "id": "en-hebang",
+      "name": "英语听力男声 (HeBang)",
+      "author": "用户提供 (高考英语听力试音)",
+      "license": "高考英语听力试音音频 — 分发前需确认授权",
+      "speaker": "https://raw.githubusercontent.com/TaoruiLiu19/dsh-gsv/main/docs/voices/en-hebang.mp3",
+      "prompt": "https://raw.githubusercontent.com/TaoruiLiu19/dsh-gsv/main/docs/voices/en-hebang.mp3",
+      "promptText": "Yes. Every day except Thursday we have a language evening. People can come and practice their languages—you know, over a drink or something. We have different languages on different evenings. Monday—Spanish; Tuesday—Italian; Wednesday—German; and Friday—French.",
+      "sizeBytes": 740156,
+      "sha256": {
+        "speaker": "cd962372d586f48a04c4169f2724d114fe07d962fea0819a0e3a0badd678a5c6",
+        "prompt": "cd962372d586f48a04c4169f2724d114fe07d962fea0819a0e3a0badd678a5c6"
+      }
+    }
+  ]
+}

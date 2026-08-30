@@ -6,7 +6,8 @@ import { EngineSetup } from './setup.js';
 import { AudioStore } from './audio-store.js';
 import { EngineManager } from './engine-manager.js';
 import { TextCleaner, MAX_SEGMENTED_TEXT_LENGTH } from './text-cleaner.js';
-import type { Config as PluginConfig, HealthCheckResult, SetupResult } from './types.js';
+import { VoiceRegistryManager } from './voice-registry.js';
+import type { Config as PluginConfig, HealthCheckResult, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
 export const inject = ['tools', 'webServer', 'settings'];
@@ -22,12 +23,15 @@ export const Config: any = Schema.object({
     speakerAudioPath: Schema.string().description('目标音色参考音频路径').role('path'),
     promptAudioPath: Schema.string().description('提示音频路径（声音克隆必需）').role('path'),
     promptText: Schema.string().description('提示文本（对应提示音频的文字，留空时若引擎支持 ASR 会自动转写，否则合成报错）').default(''),
+    id: Schema.string().description('注册表来源 id（注册表安装音色用）').default(''),
+    source: Schema.string().description('音色来源：user 自定义 / registry 注册表安装').default('user'),
   })).default([]).description('音色预设列表，可在设置中自定义'),
   defaultVoice: Schema.string().description('默认音色名称（留空则使用列表第一个）').default(''),
   autoPlay: Schema.boolean().default(false).description('是否自动朗读助手回复'),
   interruptOnNew: Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）'),
   timeout: Schema.number().default(30000).description('请求超时时间（毫秒）'),
   installDir: Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录'),
+  voiceRegistryUrl: Schema.string().default('').description('音色市场远端清单地址（留空使用包内离线清单）'),
 });
 
 export function apply(ctx: any, config: PluginConfig) {
@@ -53,8 +57,9 @@ export function apply(ctx: any, config: PluginConfig) {
   };
 
   // 设置面板命名空间：base = cordis 配置，settings.yaml 用户层覆盖，变更热生效
+  let settingsScope: any = null;
   try {
-    const settingsScope = ctx.settings.register('dsh-gsv-tts', Config, { base: config });
+    settingsScope = ctx.settings.register('dsh-gsv-tts', Config, { base: config });
     reconfigure(settingsScope.get());
     settingsScope.watch(() => {
       try {
@@ -67,6 +72,15 @@ export function apply(ctx: any, config: PluginConfig) {
   } catch (e) {
     ctx.logger?.warn?.('dsh-gsv-tts 设置命名空间注册失败', e);
   }
+
+  // 音色注册表核心（工具与 HTTP 路由共享）：写回走 settingsScope.update → watch 热更新
+  const voiceRegistry = new VoiceRegistryManager({
+    getConfig: () => current,
+    writeConfig: async (patch) => {
+      if (!settingsScope) throw new Error('设置服务未就绪，无法写入音色配置');
+      await settingsScope.update(patch);
+    },
+  });
 
   // 注册音频文件路由（同源，浏览器可直接播放；插件卸载时自动注销）
   ctx.effect(() => ctx.webServer.register({
@@ -224,6 +238,58 @@ export function apply(ctx: any, config: PluginConfig) {
       } catch (e: any) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+      }
+    },
+  }));
+
+  // ─── 音色市场（双通道的 HTTP 侧，与 tts_voice_* 工具共享 voiceRegistry 核心） ───
+  const readJson = async (req: any): Promise<Record<string, unknown>> => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  };
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/registry/list',
+    handler: async (req: any, res: any) => {
+      try {
+        const { registryUrl } = await readJson(req);
+        json(res, 200, await voiceRegistry.list(typeof registryUrl === 'string' ? registryUrl : undefined));
+      } catch (e: any) {
+        json(res, 200, { ok: false, message: String(e?.message ?? e) });
+      }
+    },
+  }));
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/registry/install',
+    handler: async (req: any, res: any) => {
+      try {
+        const { id, confirm } = await readJson(req);
+        if (typeof id !== 'string' || !id) {
+          json(res, 400, { ok: false, message: '缺少 id' });
+          return;
+        }
+        json(res, 200, await voiceRegistry.install(id, confirm === true));
+      } catch (e: any) {
+        json(res, 200, { ok: false, message: String(e?.message ?? e) });
+      }
+    },
+  }));
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/registry/remove',
+    handler: async (req: any, res: any) => {
+      try {
+        const { id, deleteFiles } = await readJson(req);
+        if (typeof id !== 'string' || !id) {
+          json(res, 400, { ok: false, message: '缺少 id' });
+          return;
+        }
+        json(res, 200, await voiceRegistry.remove(id, deleteFiles !== false));
+      } catch (e: any) {
+        json(res, 200, { ok: false, message: String(e?.message ?? e) });
       }
     },
   }));
@@ -485,11 +551,126 @@ export function apply(ctx: any, config: PluginConfig) {
     },
   });
 
+  // ─── 工具 5: tts_voice_registry ─── 列出音色市场可安装音色 ───
+  const voiceRegistryTool = defineTool({
+    name: 'tts_voice_registry',
+    description: '列出音色市场（注册表）中的可安装音色。可传 registryUrl 覆盖默认清单源。',
+    parameters: {
+      registryUrl: { type: 'string', description: '清单地址（默认使用配置或包内离线清单）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          source: { type: 'string' },
+          trusted: { type: 'boolean' },
+          version: { type: 'string' },
+          voices: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                name: { type: 'string' },
+                author: { type: 'string' },
+                license: { type: 'string' },
+                installed: { type: 'boolean' },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      render(_args: unknown, value: { source: string; trusted: boolean; version: string; voices: Array<{ id: string; name: string; author?: string; license: string; installed: boolean }> }) {
+        const trust = value.source === 'bundled' && value.trusted ? '（官方可信，安装免确认）' : '（第三方来源，安装需确认）';
+        const lines = value.voices.map((v) =>
+          `- **${v.name}** (\`${v.id}\`)${v.installed ? ' ✅ 已安装' : ''}\n  · 作者: ${v.author ?? '未知'} · license: ${v.license}`
+        );
+        return [
+          { type: 'text', text: `音色市场（来源: ${value.source}${trust}，清单版本 ${value.version}）：\n${lines.join('\n')}` },
+        ];
+      },
+    },
+    async execute(args: { registryUrl?: string }) {
+      return await voiceRegistry.list(args.registryUrl);
+    },
+  });
+
+  // ─── 工具 6: tts_voice_install ─── 安装市场音色（两阶段确认） ───
+  const voiceInstallTool = defineTool({
+    name: 'tts_voice_install',
+    description: '安装音色市场中的音色。第三方来源首次调用返回 needsConfirm，需要用户确认后带 confirm=true 再次调用。',
+    parameters: {
+      id: { type: 'string', description: '市场清单中的音色 id', required: true },
+      confirm: { type: 'boolean', description: '第二阶段确认标记（第三方来源必填 true）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          needsConfirm: { type: 'boolean' },
+          message: { type: 'string' },
+          voice: {
+            type: 'object',
+            properties: {
+              name: { type: 'string' },
+              id: { type: 'string' },
+              source: { type: 'string' },
+            },
+            additionalProperties: false,
+          },
+        },
+        additionalProperties: false,
+      },
+      render(_args: unknown, value: { ok: boolean; needsConfirm?: boolean; message: string; voice?: { name: string; id: string; source: string } }) {
+        const icon = value.ok ? '✅' : value.needsConfirm ? '⚠️ 需确认' : '❌';
+        const text = value.needsConfirm
+          ? `${icon} ${value.message}\n请向用户确认来源/作者/许可后，以 confirm=true 再次调用 tts_voice_install。`
+          : `${icon} ${value.message}${value.voice ? `（${value.voice.name}, id=${value.voice.id}, ${value.voice.source}）` : ''}`;
+        return [{ type: 'text', text }];
+      },
+    },
+    async execute(args: { id: string; confirm?: boolean }) {
+      return await voiceRegistry.install(args.id, args.confirm === true);
+    },
+  });
+
+  // ─── 工具 7: tts_voice_remove ─── 卸载注册表安装的音色 ───
+  const voiceRemoveTool = defineTool({
+    name: 'tts_voice_remove',
+    description: '卸载注册表安装的音色（仅限 source=registry 的音色）。deleteFiles 默认 true 同时删除本地音频文件。',
+    parameters: {
+      id: { type: 'string', description: '要卸载的音色 id', required: true },
+      deleteFiles: { type: 'boolean', description: '是否同时删除本地音频文件（默认 true）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          ok: { type: 'boolean' },
+          message: { type: 'string' },
+        },
+        additionalProperties: false,
+      },
+      render(_args: unknown, value: { ok: boolean; message: string }) {
+        return [{ type: 'text', text: `${value.ok ? '✅' : '❌'} ${value.message}` }];
+      },
+    },
+    async execute(args: { id: string; deleteFiles?: boolean }) {
+      return await voiceRegistry.remove(args.id, args.deleteFiles !== false);
+    },
+  });
+
   // ─── 注册所有工具 ───
   ctx.tools.register(speakTool);
   ctx.tools.register(listVoicesTool);
   ctx.tools.register(healthCheckTool);
   ctx.tools.register(setupEngineTool);
+  ctx.tools.register(voiceRegistryTool);
+  ctx.tools.register(voiceInstallTool);
+  ctx.tools.register(voiceRemoveTool);
 
   // ─── 自动朗读：监听 session/event（常驻监听，是否朗读由运行时配置决定，支持设置热切换） ───
   // 服务端只做"新回复通知"（递增 seq 并暂存清洗后文本），由前端轮询触发合成与播放，

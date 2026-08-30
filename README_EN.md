@@ -127,6 +127,7 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
 | `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
+| `voiceRegistryUrl` | Remote voice-market manifest URL (empty = bundled offline manifest) | empty |
 | `voices` | Voice preset list | empty |
 
 Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.

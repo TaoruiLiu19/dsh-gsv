@@ -127,6 +127,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
 | `autoPlay` | 自动朗读助手回复 | `false` |
 | `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
+| `voiceRegistryUrl` | 音色市场远端清单地址（留空使用包内离线清单） | 空 |
 | `voices` | 音色预设列表 | 空 |
 
 配置保存在 DSH 的 settings（`~/.dsh/settings.yaml` 的 `dsh-gsv-tts:` 段），修改后插件热生效。
