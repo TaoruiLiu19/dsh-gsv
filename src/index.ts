@@ -11,6 +11,9 @@ import type { Config as PluginConfig, HealthCheckResult, SetupResult } from './t
 export const name = 'dsh-gsv-tts';
 export const inject = ['tools', 'webServer', 'settings'];
 
+/** 音色试听固定文案：含长短句、数字与语气词，便于靠耳朵对比音色。 */
+const PREVIEW_TEXT = '这是一段音色试听：你好，欢迎使用本地语音引擎。今天的天气很好，我们出发去爬山吧，一二三四五！';
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const Config: any = Schema.object({
   apiUrl: Schema.string().default('http://localhost:9880').description('GSV-TTS-Lite API 服务地址'),
@@ -167,6 +170,52 @@ export function apply(ctx: any, config: PluginConfig) {
           if (!engine.running) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ message: '语音引擎未启动，请到 设置 → 引擎 打开开关' }));
+            return;
+          }
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+        }
+      } catch (e: any) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+      }
+    },
+  }));
+
+  // 音色试听：接收草稿音色完整参数（不查已保存配置——未保存的音色也能直接试听），
+  // 用固定文案单次合成，返回音频 URL。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/preview',
+    handler: async (req: any, res: any) => {
+      try {
+        let raw = '';
+        for await (const chunk of req) raw += chunk;
+        const body = JSON.parse(raw || '{}');
+        const v: Record<string, unknown> = body.voice ?? {};
+        const name = String(v.name ?? '试听音色');
+        const speakerAudioPath = String(v.speakerAudioPath ?? '');
+        const promptAudioPath = String(v.promptAudioPath ?? '');
+        if (!speakerAudioPath || !promptAudioPath) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: '试听需要填写 参考音频路径 与 提示音频路径' }));
+          return;
+        }
+        try {
+          const r = await tts.synthesize(PREVIEW_TEXT, {
+            name,
+            speakerAudioPath,
+            promptAudioPath,
+            promptText: String(v.promptText ?? ''),
+          });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: name }));
+        } catch (e: any) {
+          // 引擎未启动是最常见失败：给出明确原因
+          const engine = await engineManager.status();
+          if (!engine.running) {
+            res.writeHead(503, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: '语音引擎未启动，请到上方打开引擎开关' }));
             return;
           }
           res.writeHead(500, { 'Content-Type': 'application/json' });

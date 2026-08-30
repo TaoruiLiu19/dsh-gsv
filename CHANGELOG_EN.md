@@ -2,6 +2,13 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-08-29
+
+### Settings panel enhancements (P1-3)
+- Per-voice "Preview" button: synthesizes a fixed preview sentence and plays it — **unsaved draft voices can be previewed too**, perfect for ear-based voice picking
+- New "Preview all (loop)": synthesizes every voice and loops through them for comparison, with pause/stop; failed voices are reported
+- The engine status bar + one-click start/stop at the top of the panel have been available since 2.2.0; unchanged in this release
+
 ## [2.5.0] - 2026-08-29
 
 ### Read-aloud text cleaning (P0-1)
@@ -65,6 +72,7 @@ All notable changes to dsh-gsv-tts are documented in this file. Format based on 
 - Initial release: integrates the GSV-TTS-Lite local TTS engine
 - Ships four tools: `tts_speak` / `tts_list_voices` / `tts_health_check` / `tts_setup_engine`
 
+[2.6.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.2...v2.5.0
 [2.3.2]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.0...v2.3.1

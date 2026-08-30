@@ -1,6 +1,6 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "DSH plugin for GSV-TTS-Lite: voice presets, auto-read, engine setup assistant, read-aloud button, and settings panel",
   "keywords": [
     "dsh-plugin",

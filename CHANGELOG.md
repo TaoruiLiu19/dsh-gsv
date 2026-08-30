@@ -2,6 +2,13 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [2.6.0] - 2026-08-29
+
+### 设置面板增强（P1-3）
+- 每条音色新增"试听"按钮：用固定试听文案单次合成并播放（**未保存的草稿音色也能直接试听**，便于"靠耳朵挑"）
+- 新增"全部试听（循环）"：批量合成所有音色后循环播放，边听边对比，可暂停/停止；失败音色给出提示
+- 面板顶栏的引擎运行状态 + 一键启停自 2.2.0 起已提供，本次无改动
+
 ## [2.5.0] - 2026-08-29
 
 ### 朗读净化补全（P0-1）
@@ -65,6 +72,7 @@
 - 首个正式版本：接入 GSV-TTS-Lite 本地 TTS 引擎
 - 提供 `tts_speak` / `tts_list_voices` / `tts_health_check` / `tts_setup_engine` 四个工具
 
+[2.6.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.5.0...v2.6.0
 [2.5.0]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.2...v2.5.0
 [2.3.2]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.1...v2.3.2
 [2.3.1]: https://github.com/TaoruiLiu19/dsh-gsv/compare/v2.3.0...v2.3.1

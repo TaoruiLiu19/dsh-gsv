@@ -18,7 +18,7 @@
 - ⚡ **True streaming synthesis**: SSE chunk-by-chunk synthesis — the first chunk is pushed as soon as it arrives
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **split into sentence segments and played progressively**, with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
-- 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart)
+- 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
 - 🚀 **One-click engine control**: start/stop the local GSV-TTS-Lite engine (model loading ~15–90 s)
 - 🛠️ **One-click engine setup**: `tts_setup_engine` auto-detects Python, installs deps, clones the repo, and starts the service
 - 🔗 **Same-origin audio short links**: audio is saved as WAV and served by the DSH web server — no more giant data URLs in the model context

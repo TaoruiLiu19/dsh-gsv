@@ -120,6 +120,21 @@ test('barge-in：新队列打断旧队列', async () => {
   assert.equal(FakeAudio.instances[1].url, 'b1');
 });
 
+test('loop：队列播完自动从头循环，stop 后退出循环', async () => {
+  await loadPlayer();
+  player.play('loop', [{ url: 'a1', duration: 10 }, { url: 'a2', duration: 20 }], { loop: true });
+  FakeAudio.instances[0].emit('ended');
+  assert.equal(player.index, 1, '第一段播完进入第二段');
+  FakeAudio.instances[1].emit('ended');
+  assert.equal(player.index, 0, '第二段播完循环回第一段');
+  assert.equal(FakeAudio.instances.length, 3);
+  assert.equal(player.state, 'playing');
+  assert.equal(player.loop, true);
+  player.stop();
+  assert.equal(player.loop, false);
+  assert.equal(player.state, 'idle');
+});
+
 test('空队列与停止后的进度防御', async () => {
   await loadPlayer();
   player.play('empty', []);
