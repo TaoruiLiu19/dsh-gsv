@@ -160,6 +160,8 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 从音色市场一键下载并注入音色，无需手动填写参考音频路径。
 
+> 🌐 **在线试听网站**：[https://taoruiliu19.github.io/gsv-market/](https://taoruiliu19.github.io/gsv-market/) —— 浏览、试听、下载市场中的全部音色，无需安装插件。
+
 1. 打开 设置 → 声音设置 → **音色市场**
 2. 浏览音色卡片（来源、作者、许可），点 **试听** 预听
 3. 点 **安装**：

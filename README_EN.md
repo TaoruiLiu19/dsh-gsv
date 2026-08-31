@@ -160,6 +160,8 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 
 Download and inject voices from the Voice Market in one click — no need to fill in reference audio paths manually.
 
+> 🌐 **Online audition site**: [https://taoruiliu19.github.io/gsv-market/](https://taoruiliu19.github.io/gsv-market/) — browse, preview, and download every voice in the market without installing the plugin.
+
 1. Open Settings → Voice Settings → **Voice Market**
 2. Browse the voice cards (source, author, license); click **Preview** to listen
 3. Click **Install**:
