@@ -19,6 +19,7 @@
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **split into sentence segments and played progressively**, with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
+- 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation
 - 🚀 **One-click engine control**: start/stop the local GSV-TTS-Lite engine (model loading ~15–90 s)
 - 🛠️ **One-click engine setup**: `tts_setup_engine` auto-detects Python, installs deps, clones the repo, and starts the service
 - 🔗 **Same-origin audio short links**: audio is saved as WAV and served by the DSH web server — no more giant data URLs in the model context
@@ -97,6 +98,20 @@ Ask the agent to call `tts_setup_engine`. It automatically: detects Python → i
 8. In Settings → Voice Settings, toggle the engine on to verify
 
 > Example audio lives in `<repo>/examples/` (`laffey.mp3`, `AnAn.ogg`) — usable as test voices.
+
+## 🎪 Voice Market
+
+Download and inject voices from the Voice Market in one click — no need to fill in reference audio paths manually.
+
+1. Open Settings → Voice Settings → **Voice Market**
+2. Browse the voice cards (source, author, license); click **Preview** to listen
+3. Click **Install**:
+   - Bundled trusted manifest (`trusted`) → installs directly
+   - Custom remote manifest (`voiceRegistryUrl`) → second confirmation of source & license before installing
+4. Installed voices are added to "Voice presets" and can be used from 🔊 / `tts_speak`
+5. Market-installed voices are **read-only** in the panel (uninstall only) to keep the id ledger intact; **Uninstall** can (with a prompt) also delete the local audio files
+
+> **Trust rule**: trust ships with the plugin build. Only the bundled offline manifest marked as trusted installs without confirmation; **any remote manifest always requires a second confirmation** (even if it claims to be trusted). For custom voices, add them manually under "Voice presets".
 
 ## 🎙️ Adding a Voice
 

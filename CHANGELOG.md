@@ -2,7 +2,7 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [3.0.0] - 开发中
+## [3.0.0] - 2026-08-30
 
 ### 音色 Registry 一键安装（P2）
 - 音色市场：包内离线清单（`docs/voices.json`）或自定义远端源（`voiceRegistryUrl`，服务端拉取带 no-cache）
