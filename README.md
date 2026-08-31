@@ -135,15 +135,21 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
+| TTS 模式 | 快速体验（Edge 云端，免安装）/ 本地专业（GSV，离线/克隆） | 老用户 `gsv` / 新装 `edge` |
 | 引擎开关 | 启动/停止 GSV-TTS-Lite 引擎进程 | 关 |
 | `apiUrl` | 引擎 API 地址 | `http://localhost:9880` |
-| `defaultVoice` | 默认音色（留空用第一个） | 空 |
+| `defaultVoice` | 默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个） | 空 |
 | `timeout` | 请求超时（毫秒） | `30000` |
 | `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
 | `autoPlay` | 自动朗读助手回复 | `false` |
 | `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
 | `voiceRegistryUrl` | 音色市场远端清单地址（留空使用包内离线清单） | 空 |
+| `provider` | `gsv` \| `edge`（初始化分派，勿手动改；设置面板切换） | 见"TTS 模式" |
+| `schemaVersion` | 配置结构版本（迁移守卫落点） | `1` |
+| `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |
 | `voices` | 音色预设列表 | 空 |
+
+> 迁移说明：**老用户升级后仍为 `gsv` 本地模式、声音不变**；全新安装默认 `edge` 云端简单模式（设置面板可随时切换）。Edge 模式需联网，声音为微软官方精选；`quotaDaily` 为预留引导字段，硬配额留待后续版本。
 
 配置保存在 DSH 的 settings（`~/.dsh/settings.yaml` 的 `dsh-gsv-tts:` 段），修改后插件热生效。
 

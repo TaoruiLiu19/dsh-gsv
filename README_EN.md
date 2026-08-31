@@ -135,15 +135,21 @@ Download and inject voices from the Voice Market in one click — no need to fil
 
 | Field | Description | Default |
 |-------|-------------|---------|
+| TTS Mode | Quick (Edge cloud, zero setup) / Local Pro (GSV, offline & cloning) | existing users `gsv` / fresh installs `edge` |
 | Engine switch | Start/stop the GSV-TTS-Lite engine process | Off |
 | `apiUrl` | Engine API URL | `http://localhost:9880` |
-| `defaultVoice` | Default voice (empty = first voice) | empty |
+| `defaultVoice` | Default voice (gsv=preset name / edge=cloud voice id; empty = first) | empty |
 | `timeout` | Request timeout (ms) | `30000` |
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
 | `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
 | `voiceRegistryUrl` | Remote voice-market manifest URL (empty = bundled offline manifest) | empty |
+| `provider` | `gsv` \| `edge` (assigned at init; switch in the settings panel) | see "TTS Mode" |
+| `schemaVersion` | Config schema version (migration guard marker) | `1` |
+| `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
 | `voices` | Voice preset list | empty |
+
+> Migration note: **existing users keep `gsv` local mode after upgrade — voices unchanged**; fresh installs default to `edge` cloud simple mode (switchable anytime in settings). Edge mode requires network and uses curated Microsoft voices; `quotaDaily` is a reserved guidance field — hard quotas come in a later release.
 
 Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.
 

@@ -1,35 +1,82 @@
 import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS } from './text-cleaner.js';
 import { splitIntoSegments } from './segmenter.js';
+import { GsvProvider } from './providers/gsv.js';
+import { EdgeProvider } from './providers/edge.js';
 import type { AudioChunk, AudioStore } from './audio-store.js';
 import type {
   Config,
-  TTSStreamRequest,
+  ProviderHealth,
+  ProviderKind,
   SynthesizeResult,
   SynthesizeSegmentsResult,
   TTSAudioSegment,
+  TTSProvider,
+  VoiceInfo,
   VoicePreset,
 } from './types.js';
+import type { VoiceManager } from './voice-manager.js';
 
 let fileCounter = 0;
 
-export class TTSService {
-  constructor(private config: Config, private audioStore: AudioStore) {}
+const EDGE_FALLBACK_VOICE = 'zh-CN-XiaoxiaoNeural';
 
-  /** 单次合成整段（tts_speak 工具路径）：清洗 → 守卫 → 流式收齐 → 落盘为单个 wav。 */
-  async synthesize(text: string, voice?: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
+export class TTSService {
+  private voiceManager: VoiceManager | undefined;
+  private gsv: GsvProvider;
+  private edge: EdgeProvider;
+
+  constructor(
+    private config: Config,
+    private audioStore: AudioStore,
+    opts?: { voiceManager?: VoiceManager; gsv?: GsvProvider; edge?: EdgeProvider },
+  ) {
+    this.voiceManager = opts?.voiceManager;
+    this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => config, voiceManager: opts?.voiceManager });
+    this.edge = opts?.edge ?? new EdgeProvider();
+  }
+
+  private provider(kind?: ProviderKind): TTSProvider {
+    return (kind ?? this.config.provider ?? 'gsv') === 'edge' ? this.edge : this.gsv;
+  }
+
+  /** 当前提供方音色列表（gsv = 本地预设；edge = 精选微软声音）。 */
+  listVoices(kind?: ProviderKind): Promise<VoiceInfo[]> {
+    return this.provider(kind).listVoices();
+  }
+
+  /** 当前提供方健康（edge = 试合成退避；gsv = 引擎状态）。 */
+  health(kind?: ProviderKind): Promise<ProviderHealth> {
+    return this.provider(kind).health();
+  }
+
+  /** 单次合成整段（tts_speak / 试听路径）。voice 可为预设对象（gsv）或音色 id（edge）。 */
+  async synthesize(
+    text: string,
+    voice?: VoicePreset | string,
+    signal?: AbortSignal,
+    kind?: ProviderKind,
+  ): Promise<SynthesizeResult> {
     const cleanText = TextCleaner.clean(text);
-    this.assertText(cleanText, voice);
+    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_TEXT_LENGTH}），请分段朗读`);
     }
-    return this.synthesizeOne(cleanText, voice!, signal);
+    const p = this.provider(kind);
+    if (p.kind === 'gsv') {
+      const preset = typeof voice === 'string' ? this.voiceManager?.get(voice) : voice;
+      if (!preset) throw new Error('未指定音色预设');
+      return this.synthesizeGsv(cleanText, preset, signal);
+    }
+    if (typeof voice === 'object' && voice !== null) {
+      throw new Error('Edge（云端简单）模式不支持本地音色预设，请在音色下拉选择云端声音');
+    }
+    return this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
   }
 
-  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按句切分后逐段流式合成，段间 0 静音拼接。
-   *  某段失败时不再中断：返回已成功的段并附 error 说明，前端可先播已就绪部分。 */
-  async synthesizeSegments(text: string, voice?: VoicePreset, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
+  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按 provider 逐段合成，段间 0 静音。 */
+  async synthesizeSegments(text: string, voice?: VoicePreset | string, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
     const cleanText = TextCleaner.clean(text);
-    this.assertText(cleanText, voice);
+    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
     }
@@ -39,7 +86,7 @@ export class TTSService {
     let error: string | undefined;
     for (let i = 0; i < parts.length; i++) {
       try {
-        const r = await this.synthesizeOne(parts[i], voice!, signal);
+        const r = await this.synthesize(parts[i], voice, signal);
         segments.push({ url: r.audioUrl, duration: r.audioLen });
         totalLen += r.audioLen;
       } catch (e) {
@@ -51,101 +98,30 @@ export class TTSService {
     return { segments, totalLen, error };
   }
 
-  private assertText(cleanText: string, voice?: VoicePreset): void {
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (!voice) throw new Error('未指定音色预设');
-    if (!voice.speakerAudioPath) throw new Error(`音色 "${voice.name}" 缺少 speakerAudioPath（参考音频路径）`);
-    if (!voice.promptAudioPath) throw new Error(`音色 "${voice.name}" 缺少 promptAudioPath（提示音频路径）`);
-    // promptText 留空时交给服务端：引擎支持 ASR 则自动转写，否则返回明确错误
-  }
-
-  private async synthesizeOne(text: string, voice: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const body: TTSStreamRequest = {
-      text,
-      speaker_audio: voice.speakerAudioPath,
-      prompt_audio: voice.promptAudioPath,
-      prompt_text: voice.promptText,
-      speed: 1.0,
-      stream_chunk: 25,
-    };
-
-    // 合并调用方取消信号与超时信号
-    const timeoutSignal = AbortSignal.timeout(this.config.timeout);
-    const ac = new AbortController();
-    const forward = () => ac.abort(new DOMException('aborted', 'AbortError'));
-    signal?.addEventListener('abort', forward, { once: true });
-    timeoutSignal.addEventListener('abort', forward, { once: true });
-
-    let resp: Response;
-    try {
-      resp = await fetch(`${this.config.apiUrl}/tts/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: ac.signal,
-      });
-    } finally {
-      signal?.removeEventListener('abort', forward);
-      timeoutSignal.removeEventListener('abort', forward);
-    }
-
-    if (!resp.ok) {
-      const detail = await resp.text().catch(() => '');
-      throw new Error(`TTS API 失败: ${resp.status} ${resp.statusText}${detail ? ` — ${detail.slice(0, 300)}` : ''}`);
-    }
-    if (!resp.body) throw new Error('TTS API 未返回响应体');
-
+  private async synthesizeGsv(cleanText: string, preset: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
     const chunks: AudioChunk[] = [];
     let totalDuration = 0;
-    let currentEvent = '';
-    let buffer = '';
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-
-        const lines = buffer.split('\n');
-        buffer = lines.pop()!;
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) {
-            currentEvent = line.slice(7).trim();
-          } else if (line.startsWith('data: ')) {
-            const payload = line.slice(6);
-            let data: Record<string, unknown>;
-            try {
-              data = JSON.parse(payload) as Record<string, unknown>;
-            } catch {
-              continue; // 忽略残缺行
-            }
-            if (currentEvent === 'audio') {
-              const audio = data.audio;
-              if (typeof audio === 'string' && audio) {
-                const sampleRate = typeof data.sample_rate === 'number' ? data.sample_rate : 32000;
-                chunks.push({ base64: audio, sampleRate });
-              }
-            } else if (currentEvent === 'done') {
-              totalDuration = Number(data.total_duration) || 0;
-            } else if (currentEvent === 'error') {
-              throw new Error('API 错误: ' + String(data.error ?? '未知错误'));
-            }
-          }
-        }
+    for await (const chunk of this.gsv.streamWithPreset(cleanText, preset, signal)) {
+      if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate) {
+        chunks.push({ base64: Buffer.from(chunk.data).toString('base64'), sampleRate: chunk.sampleRate });
       }
-    } catch (e) {
-      if (ac.signal.aborted && !(e instanceof Error && e.message.startsWith('API 错误'))) {
-        throw new Error('TTS 请求被取消或超时（' + this.config.timeout + 'ms）');
-      }
-      throw e;
+      if (chunk.totalDuration) totalDuration = chunk.totalDuration;
     }
-
     if (chunks.length === 0) throw new Error('未收到任何音频数据');
-
     const saved = this.audioStore.save(`tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`, chunks);
     return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
+  }
+
+  private async synthesizeEdge(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
+    const id = voiceId || this.config.defaultVoice || EDGE_FALLBACK_VOICE;
+    const parts: Buffer[] = [];
+    for await (const chunk of this.edge.stream(cleanText, id, signal)) {
+      if (chunk.mime === 'audio/mpeg' && chunk.data.length > 0) {
+        parts.push(Buffer.from(chunk.data));
+      }
+    }
+    if (parts.length === 0) throw new Error('Edge 未返回音频数据（云端通道可能不可用）');
+    const saved = this.audioStore.saveRaw(`tts_${Date.now()}_${(fileCounter++).toString(36)}.mp3`, Buffer.concat(parts));
+    return { audioUrl: saved.url, audioLen: 0, filename: saved.name };
   }
 }

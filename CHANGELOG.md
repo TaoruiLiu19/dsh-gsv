@@ -2,6 +2,19 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [4.0.0] - 开发中
+
+### 简单模式（Edge 云端第二 Provider）
+- 双 Provider 抽象：`gsv`（本地克隆/离线专业模式）+ `edge`（微软 Edge 云端简单模式），按 `config.provider` 分发，接口 `{kind, listVoices, stream, health}`
+- **迁移守卫**：老用户（settings 无 provider 字段）保持 `gsv`、声音不变；全新安装默认 `edge`；切换后写回持久化
+- Edge 底层 `edge-tts-universal`（原生流式、token 自动刷新、错误恢复、代理），MP3 块零转码透传（`audio/mpeg`），复用 AudioStore/分段渐进播放/暂停下载
+- 音色清单：`listVoices` 按精选序 + zh-CN/en 过滤生成（晓晓/云希/云野等 20+ 中文 + Aria 等英文）
+- **分层健康**：库内 error-recovery/token 刷新兜底瞬时故障；`health()` = 试合成 1 秒 + 退避（≤1 次/60s，30→60→120s，成功重置）
+- 设置面板：模式切换 Tab（快速体验/本地专业）+ 品质角标（🌐 云端 / 🖥️ 本地·离线）+ 音色下拉按 provider 换源 + 云端健康行与降级引导
+- 新增路由 `/provider/voices` `/provider/health`；`tts_speak`/`tts_list_voices` 按 provider 分发
+- `quotaDaily` 配置字段（默认不限量，仅引导文案，硬计数留待 4.x）
+- 单测并入 CI：迁移双分支、Edge MP3 透传、精选音色过滤、健康退避、TTSService 分发落盘
+
 ## [3.0.0] - 2026-08-30
 
 ### 音色 Registry 一键安装（P2）

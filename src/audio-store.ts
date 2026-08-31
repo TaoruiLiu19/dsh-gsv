@@ -13,7 +13,12 @@ import type { IncomingMessage, ServerResponse } from 'http';
  */
 
 const MAX_FILES = 200;
-const FILE_RE = /^[A-Za-z0-9._-]+\.wav$/;
+const FILE_RE = /^[A-Za-z0-9._-]+\.(wav|mp3|ogg)$/;
+
+/** 按扩展名回 MIME（Edge MP3 透传需要 audio/mpeg）。 */
+function mimeFor(name: string): string {
+  return name.toLowerCase().endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav';
+}
 
 export interface AudioChunk {
   /** 该块的 base64 编码音频数据（GSV-TTS-Lite 输出 32-bit float32 波形） */
@@ -43,12 +48,17 @@ export class AudioStore {
     const sampleRate = chunks[0]?.sampleRate || 32000;
     const pcm = Buffer.concat(chunks.map((c) => Buffer.from(c.base64, 'base64')));
     const wav = buildWav(pcm, sampleRate);
+    return this.saveRaw(name, wav);
+  }
+
+  /** 将原始音频字节（MP3/WAV 等）落盘并返回可播放 URL（4.0.0 Edge MP3 透传）。 */
+  saveRaw(name: string, data: Buffer): { url: string; name: string } {
     const file = join(this.dir, name);
-    writeFileSync(file, wav);
+    writeFileSync(file, data);
     this.enforceCap();
     const url = this.baseUrl
       ? `${this.baseUrl}/dsh-gsv-tts/audio/${name}`
-      : `data:audio/wav;base64,${wav.toString('base64')}`;
+      : `data:${mimeFor(name)};base64,${data.toString('base64')}`;
     return { url, name };
   }
 
@@ -70,7 +80,7 @@ export class AudioStore {
       }
       const stat = statSync(file);
       res.writeHead(200, {
-        'Content-Type': 'audio/wav',
+        'Content-Type': mimeFor(name),
         'Content-Length': stat.size,
         'Cache-Control': 'no-cache',
       });

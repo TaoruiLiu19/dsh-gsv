@@ -2,6 +2,19 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - in development
+
+### Simple Mode (Edge cloud as a second provider)
+- Dual-provider abstraction: `gsv` (local cloning / offline pro mode) + `edge` (Microsoft Edge cloud simple mode), dispatched by `config.provider` via `{kind, listVoices, stream, health}`
+- **Migration guard**: existing users (no `provider` in settings) stay on `gsv` — voices unchanged; fresh installs default to `edge`; the choice is persisted
+- Edge backed by `edge-tts-universal` (native streaming, automatic token refresh, error recovery, proxy); MP3 chunks pass through with zero transcoding (`audio/mpeg`), reusing AudioStore / segmented progressive playback / pause-download
+- Voice list generated from `listVoices` with curated ordering + zh-CN/en filtering (20+ Chinese voices incl. Xiaoxiao/Yunxi/Yunye, plus Aria & friends)
+- **Layered health**: library-level error recovery / token refresh absorbs flicker; `health()` = 1-second test synthesis with backoff (≤1 per 60s, 30→60→120s, reset on success)
+- Settings panel: mode-switch tabs (Quick / Local Pro) + quality badges (🌐 Cloud / 🖥️ Local·Offline) + provider-aware voice dropdown + cloud health line with downgrade guidance
+- New routes `/provider/voices` `/provider/health`; `tts_speak` / `tts_list_voices` dispatch per provider
+- `quotaDaily` config field (unlimited by default; guidance copy only; hard counting deferred to 4.x)
+- Unit tests wired into CI: migration branches, Edge MP3 passthrough, curated voice filtering, health backoff, TTSService dispatch persistence
+
 ## [3.0.0] - 2026-08-30
 
 ### Voice Registry one-click install (P2)

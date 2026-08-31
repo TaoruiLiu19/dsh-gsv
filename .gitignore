@@ -7,4 +7,5 @@ lib/*
 .DS_Store
 Thumbs.db
 .pnpm-store/
+.npm-cache/
 __pycache__/
