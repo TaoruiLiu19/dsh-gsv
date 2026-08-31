@@ -1,0 +1,35 @@
+name: sync-voices-from-market
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch latest voices.json from market site
+        run: |
+          curl -sL "https://taoruiliu19.github.io/gsv-market/voices.json" -o docs/voices.json
+
+      - name: Validate JSON
+        run: |
+          python -c "import json; json.load(open('docs/voices.json'))"
+
+      - name: Commit if changed
+        run: |
+          if ! git diff --quiet -- docs/voices.json; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/voices.json
+            git commit -m "chore: sync bundled voices.json from gsv-market"
+            git push
+          else
+            echo "docs/voices.json unchanged, skip commit"
+          fi

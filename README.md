@@ -170,7 +170,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 4. 安装后音色自动加入"音色预设"，即可在 🔊 / `tts_speak` 中选用
 5. 市场安装的音色在面板中**只读**（仅可卸载），防止误改破坏账本；点 **卸载** 可（提示）同时删除本地音频
 
-> **信任规则**：信任 = 随插件发版内置。仅包内离线清单且标记可信源时免确认；**任何远端清单一律二次确认**（即便自报可信）。自定义音色请在"音色预设"手工添加。
+> **信任规则（A+ 混合模式）**：包内 `docs/voices.json` 收录的音色始终视为 trusted（随包发布已审计），即便经远端清单展示也免确认；远端清单中新增的音色（包内未收录）一律二次确认。合并时以 id 为键，包内优先，远端只补充新 id。自定义音色请在"音色预设"手工添加。
 
 ## 🎙️ 添加音色（本地 GSV）
 
@@ -202,7 +202,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
 | `autoPlay` | 自动朗读助手回复 | `false` |
 | `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
-| `voiceRegistryUrl` | 音色市场远端清单地址（留空使用包内离线清单） | 空 |
+| `voiceRegistryUrl` | 音色市场远端清单地址（默认指向在线试听站点；留空仅用包内离线清单） | 站点 URL |
 | `provider` | `gsv` \| `edge`（初始化分派，勿手动改；设置面板切换） | 见"TTS 模式" |
 | `schemaVersion` | 配置结构版本（迁移守卫落点） | `1` |
 | `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |

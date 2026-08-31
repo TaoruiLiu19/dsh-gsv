@@ -35,7 +35,7 @@ export const Config: any = Schema.object({
   interruptOnNew: Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）'),
   timeout: Schema.number().default(30000).description('请求超时时间（毫秒）'),
   installDir: Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录'),
-  voiceRegistryUrl: Schema.string().default('').description('音色市场远端清单地址（留空使用包内离线清单）'),
+  voiceRegistryUrl: Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）'),
   schemaVersion: Schema.number().default(SCHEMA_VERSION).description('配置结构版本'),
   provider: Schema.union([Schema.const('gsv'), Schema.const('edge')]).description('TTS 引擎：gsv 本地专业 / edge 云端简单模式（初始化分派，勿手动改）'),
   quotaDaily: Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）'),

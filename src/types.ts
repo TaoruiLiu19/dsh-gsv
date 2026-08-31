@@ -18,7 +18,7 @@ export interface Config {
   interruptOnNew: boolean;
   timeout: number;
   installDir: string;
-  /** 音色市场远端清单地址；留空（''）使用包内 docs/voices.json（离线） */
+  /** 音色市场远端清单地址；默认指向在线试听站点，留空（''）则仅用包内 docs/voices.json（离线） */
   voiceRegistryUrl: string;
   /** 配置结构版本（迁移守卫的落点标记） */
   schemaVersion: number;

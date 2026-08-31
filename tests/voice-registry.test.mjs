@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { validateManifest, VoiceRegistryManager, MAX_FILE_BYTES } from '../lib/voice-registry.js';
+import { validateManifest, VoiceRegistryManager, fetchRetry, resolveBundledFile, MAX_FILE_BYTES } from '../lib/voice-registry.js';
 import { VoiceManager } from '../lib/voice-manager.js';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -138,26 +138,22 @@ test('信任：远端清单 confirm 后完成安装并写回 id/source', async (
   assert.equal(vm.get('Test Voice').source, 'registry');
 });
 
-test('信任：包内离线清单（真实 docs/voices.json, trusted）免确认直落', async () => {
+test('信任：包内离线清单（真实 docs/voices.json, trusted）免确认直落——本地素材离线安装成功', async () => {
   const config = makeBaseConfig(freshInstallDir());
   const writeLog = [];
-  // 从真实清单取第一个条目，注入与它 sha256 不一致的假数据 → 应走到下载阶段（免确认），
-  // 在 sha256 校验处失败——以此证明没有 needsConfirm 分支
   const manifest = JSON.parse(readFileSync(new URL('../docs/voices.json', import.meta.url), 'utf8'));
   assert.equal(manifest.trusted, true);
   const mgr = makeManager({
     config,
     fetchers: {
-      fetchBinary: async () => speakerData, // 与真实 sha256 不匹配
+      fetchBinary: async () => { throw new Error('包内素材不应走网络下载'); },
     },
     writeLog,
   });
   const r = await mgr.install(manifest.voices[0].id, false);
   assert.equal(r.needsConfirm, undefined, '包内可信清单不应需要确认');
-  assert.equal(r.ok, false);
-  assert.match(r.message, /sha256/);
-  assert.deepEqual(config.voices, []);
-  assert.equal(writeLog.length, 0);
+  assert.equal(r.ok, true, '包内素材应本地离线安装成功');
+  assert.equal(config.voices.length, 1);
 });
 
 test('list：标注已安装状态，来源 bundled', async () => {
@@ -275,4 +271,59 @@ test('卸载：未知 id 返回 ok:false（不抛异常）', async () => {
   const r = await mgr.remove('no-such-id', true);
   assert.equal(r.ok, false);
   assert.match(r.message, /未安装/);
+});
+
+test('fetchRetry：网络抖动重试后成功（换边缘节点自愈）', async () => {
+  let calls = 0;
+  const ok = { ok: true, text: async () => '{}', status: 200 };
+  const impl = async () => {
+    calls += 1;
+    if (calls < 3) throw new Error('fetch failed');
+    return ok;
+  };
+  const resp = await fetchRetry(impl, 'https://x/y');
+  assert.equal(calls, 3);
+  assert.equal(resp.ok, true);
+});
+
+test('fetchRetry：连续失败抛回原错误；HTTP 4xx 不重试', async () => {
+  let calls = 0;
+  const failing = async () => { calls += 1; throw new Error('ECONNRESET'); };
+  await assert.rejects(() => fetchRetry(failing, 'https://x/y', 3), /ECONNRESET/);
+  assert.equal(calls, 3);
+  let httpCalls = 0;
+  const http404 = async () => { httpCalls += 1; return { ok: false, status: 404, text: async () => '' }; };
+  const r = await fetchRetry(http404, 'https://x/y', 3);
+  assert.equal(httpCalls, 1, 'HTTP 404 应立即返回不重试');
+  assert.equal(r.ok, false);
+});
+
+test('resolveBundledFile：包内素材 URL → 本地路径；未知文件 → null', () => {
+  const manifest = JSON.parse(readFileSync(new URL('../docs/voices.json', import.meta.url), 'utf8'));
+  const pkg = manifest.voices[0];
+  const p = resolveBundledFile(pkg.speaker);
+  assert.ok(p && existsSync(p), '包内素材应解析到本地文件');
+  assert.equal(resolveBundledFile('https://example.com/nonexistent.mp3'), null);
+});
+
+test('包内素材离线安装：不触发任何下载（网络 TLS 故障也不影响）', async () => {
+  const config = makeBaseConfig(freshInstallDir());
+  const writeLog = [];
+  let downloadCalls = 0;
+  const mgr = makeManager({
+    config,
+    fetchers: {
+      fetchBinary: async () => { downloadCalls += 1; throw new Error('不应走网络下载'); },
+    },
+    writeLog,
+  });
+  // 用真实包内清单的第一个音色（含本地素材）
+  const manifest = JSON.parse(readFileSync(new URL('../docs/voices.json', import.meta.url), 'utf8'));
+  const r = await mgr.install(manifest.voices[0].id, false);
+  assert.equal(r.ok, true, r.message);
+  assert.equal(downloadCalls, 0, '包内素材必须零网络下载');
+  assert.equal(writeLog.length, 1);
+  const voice = config.voices[0];
+  assert.ok(existsSync(voice.speakerAudioPath), 'speaker 应落盘');
+  assert.ok(existsSync(voice.promptAudioPath), 'prompt 应落盘');
 });

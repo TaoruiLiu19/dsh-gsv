@@ -170,7 +170,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 4. Installed voices are added to "Voice presets" and can be used from 🔊 / `tts_speak`
 5. Market-installed voices are **read-only** in the panel (uninstall only) to keep the id ledger intact; **Uninstall** can (with a prompt) also delete the local audio files
 
-> **Trust rule**: trust ships with the plugin build. Only the bundled offline manifest marked as trusted installs without confirmation; **any remote manifest always requires a second confirmation** (even if it claims to be trusted). For custom voices, add them manually under "Voice presets".
+> **Trust rule (A+ hybrid)**: voices listed in the bundled `docs/voices.json` are always treated as trusted (audited at release), even when displayed via the remote manifest — no confirmation needed. New voices only in the remote manifest (not bundled) always require a second confirmation. Merge is keyed by id: bundled voices take priority, remote only supplements new ids. For custom voices, add them manually under "Voice presets".
 
 ## 🎙️ Adding a Voice (local GSV)
 
@@ -202,7 +202,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
 | `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
-| `voiceRegistryUrl` | Remote voice-market manifest URL (empty = bundled offline manifest) | empty |
+| `voiceRegistryUrl` | Remote voice-market manifest URL (defaults to the online audition site; empty = bundled offline only) | site URL |
 | `provider` | `gsv` \| `edge` (assigned at init; switch in the settings panel) | see "TTS Mode" |
 | `schemaVersion` | Config schema version (migration guard marker) | `1` |
 | `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
