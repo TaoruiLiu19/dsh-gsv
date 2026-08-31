@@ -200,6 +200,24 @@ export function apply(ctx: any, config: PluginConfig) {
       }
     },
   }));
+  // 云端（Edge）音色试听：voice = 云端音色 id，强制走 edge 提供方
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/provider/preview',
+    handler: async (req: any, res: any) => {
+      try {
+        const { voice } = await readJson(req);
+        if (typeof voice !== 'string' || !voice) {
+          json(res, 400, { message: '缺少云端音色 id' });
+          return;
+        }
+        const r = await tts.synthesize(PREVIEW_TEXT, voice, undefined, 'edge');
+        json(res, 200, { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: voice });
+      } catch (e: any) {
+        json(res, 500, { message: String(e?.message ?? e) });
+      }
+    },
+  }));
 
   // 自动朗读轮询：前端带着上次看到的 seq 来，服务端返回当前 seq 与新文本
   // （text 仅在 seq 前进时有意义；无新回复时返回当前 seq，前端据此判断无变化）。

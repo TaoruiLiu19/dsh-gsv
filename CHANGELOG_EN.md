@@ -2,7 +2,14 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [4.0.0] - in development
+## [4.1.0] - 2026-08-31
+
+### Edge voice experience polish
+- New cloud (Edge) voice preview route `/dsh-gsv-tts/provider/preview`: preview a cloud voice directly from anywhere (only needs the cloud voice id, forces the edge provider) — no longer depends on the current provider/simple mode
+- Edge voice display names localized: Chinese voices show their official Chinese names (晓晓/Xiaoxiao, 云希/Yunxi, 云野/Yunye, 晓伊/Xiaoyi…, dialects like 晓北（辽宁）/晓妮（陕西）), mainstream English voices show short names (Aria/Guy/Emma/Sonia), and the rest are truncated from FriendlyName (stripping the "Microsoft … Online" prefix)
+- Tests updated accordingly: Chinese/English display-name assertions + FriendlyName truncation coverage
+
+## [4.0.0] - 2026-08-31
 
 ### Simple Mode (Edge cloud as a second provider)
 - Dual-provider abstraction: `gsv` (local cloning / offline pro mode) + `edge` (Microsoft Edge cloud simple mode), dispatched by `config.provider` via `{kind, listVoices, stream, health}`

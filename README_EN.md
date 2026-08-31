@@ -1,6 +1,6 @@
 # dsh-gsv-tts
 
-> A DSH (DeepSeek Harness) plugin that integrates the [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) local TTS engine — voice cloning, streaming synthesis, auto-read, one-click read-aloud, and one-click engine control, all running locally.
+> Adds text-to-speech read-aloud to DSH (DeepSeek Harness) — dual-mode: **Cloud Quick Mode** (Edge, zero install, read as soon as it's added) + **Local Pro Mode** (GSV-TTS-Lite, voice cloning, fully offline).
 
 ![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
@@ -14,15 +14,46 @@
 
 ## ✨ Features
 
-- 🎙️ **Voice cloning**: clone a target voice from reference audio; selectable by name in `tts_speak`
-- ⚡ **True streaming synthesis**: SSE chunk-by-chunk synthesis — the first chunk is pushed as soon as it arrives
+- 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and < 1 s to first audio
+- 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **split into sentence segments and played progressively**, with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
-- 🎛️ **Voice Settings panel**: Settings → Voice Settings — configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
+- 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
+- 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
 - 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation
-- 🚀 **One-click engine control**: start/stop the local GSV-TTS-Lite engine (model loading ~15–90 s)
-- 🛠️ **One-click engine setup**: `tts_setup_engine` auto-detects Python, installs deps, clones the repo, and starts the service
-- 🔗 **Same-origin audio short links**: audio is saved as WAV and served by the DSH web server — no more giant data URLs in the model context
+- 🚀 **One-click engine start/stop & setup**: local GSV engine control (model loading ~15–90 s) and auto-install, all from the settings panel / tools
+- 🔗 **Same-origin audio short links**: synthesized audio is saved and served same-origin — no more giant data URLs in the model context
+
+---
+
+## 🎯 Quick Start (either mode)
+
+| What you want | Which mode | How to begin |
+|---|---|---|
+| "I just want it to **read as soon as it's installed**" | 🌐 **Quick Mode (Edge)** | See "Quick Mode (Edge)" below — **no installation needed** |
+| "I want to **clone my own voice / be fully offline**" | 🖥️ **Local Pro Mode (GSV)** | See "Local Pro Mode (GSV)" below |
+
+> **Default mode**: fresh installs default to **Edge Quick Mode** (works online); **existing users upgrading keep GSV local mode with voices unchanged**, and can switch anytime in the settings panel.
+
+### 1. Quick Mode (Edge, default for new installs)
+
+1. Install the plugin and restart DSH (see "📦 Installation")
+2. Open Settings → Voice Settings → **TTS Mode** → select **Quick (Edge)**
+3. Pick a cloud voice from the "Voice" dropdown (Xiaoxiao / Yunxi / Aria…)
+4. Click the 🔊 next to any assistant message — **audio plays immediately, < 1 s**
+
+> No Python, no models, no engine to start. Only a network connection is required. Cloud voices are marked 🌐, giving you a zero-config path to listening right away.
+
+### 2. Local Pro Mode (GSV)
+
+1. Install the plugin and restart DSH (see "📦 Installation")
+2. Open Settings → Voice Settings → **TTS Mode** → select **Local Pro (GSV)**
+3. **Install the engine**: have the agent call `tts_setup_engine`, or see "🔧 Installing the GSV-TTS-Lite Engine"
+4. **Start the engine**: toggle "Start engine" on and wait until it shows "Running"
+5. **Add a voice**: add one under "Voice presets", or one-click download from the "🎪 Voice Market", or clone one
+6. Click the 🔊 next to any assistant message, or have the agent call `tts_speak`
+
+> Local Pro mode runs fully offline and supports voice cloning — independent of network and cloud quotas.
 
 ## 📦 Installation
 
@@ -42,12 +73,19 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 > Requires the DSH `webServer` service (bundled with the Web/Desktop profiles) for audio delivery and the `settings` service for the settings panel. Environments without these services keep only the tool capabilities.
 
-## 🚀 Quick Start
+## 🔄 Mode Switching & Migration
 
-1. **Install the engine**: ask the agent to call `tts_setup_engine` (or install manually below)
-2. **Start the engine**: Settings → Voice Settings → toggle "Start engine" on and wait until it shows "Running"
-3. **Add a voice**: Settings → Voice Settings → "Voice presets" → Add voice → fill in the four fields → Save
-4. **Read aloud**: click the 🔊 button next to any assistant message, or ask the agent to call `tts_speak`
+| Item | Description |
+|---|---|
+| How to switch | Settings → Voice Settings → **TTS Mode** (Quick / Local Pro), applied instantly |
+| Config field | `provider: 'edge' \| 'gsv'` (assigned at init; switch from the settings panel rather than editing manually) |
+| Existing users upgrading | Old config with no `provider` field → stays `gsv` local mode, **voices unchanged** |
+| Fresh installs | Default to `edge` cloud Quick mode, ready online |
+| `schemaVersion` | Config schema version — the migration guard marker |
+
+> Edge mode needs network; if the cloud is unavailable, the panel shows "cloud channel busy / temporarily unavailable", and local GSV mode is always available as a fallback.
+
+---
 
 ## 🏗️ Architecture
 
@@ -55,22 +93,23 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 > 📖 Interactive diagram: [open dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html) (zoom, focus, theme switching)
 
-**Two call paths**:
+**Dual-provider architecture**: `TTSService` dispatches to the cloud (Edge) or local (GSV) provider by `config.provider`; the read-aloud main path and the tool-call path are identical for both providers.
 
-- 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → the plugin extracts the message text from the session → `TTSService` streams the synthesis request → the engine returns audio chunks over SSE → `AudioStore` assembles and saves a WAV → a same-origin short link is returned to the browser for playback.
-- 🤖 **Agent tool calls (in-process, direct)**: when the agent calls `tts_speak` and friends, the host's tools service executes the plugin logic **directly in-process — no webServer HTTP gateway involved**. Shown as dashed lines to distinguish from the 🔊 button path.
+- 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → `TTSService` requests via the active provider → cloud/local engine returns audio chunks → `AudioStore` saves them → a same-origin short link is returned to the browser for playback.
+- 🤖 **Agent tool calls (in-process, direct)**: when the agent calls `tts_speak` and friends, the host's in-process tools service executes the plugin logic **directly — no webServer HTTP gateway involved**.
 
 | Part | Description |
 |------|-------------|
 | DSH app (DeepSeek Harness) | Plugin host: Web client, webServer, settings service |
-| dsh-gsv-tts plugin | `TTSService` (streaming synthesis) / `AudioStore` (WAV storage) / engine manager (start-stop · setup · health check) |
-| GSV-TTS-Lite local engine | Local Python process, FastAPI :9880, true streaming `/tts/stream` |
+| dsh-gsv-tts plugin | `TTSService` (provider dispatch) / `AudioStore` (storage) / engine manager (start-stop · setup · health check) |
+| Edge provider | `edge-tts-universal`, curated Microsoft web voices, returns an MP3 stream (decoded by the browser) |
+| GSV-TTS-Lite local engine | Local Python process, FastAPI :9880, true streaming `/tts/stream`, returns WAV |
 
 ## 📸 Screenshots
 
 ![Voice Settings panel](docs/images/settings-voice.png)
 
-*Settings → Voice Settings: engine switch, TTS configuration, help*
+*Settings → Voice Settings: TTS mode, engine switch, voice config, health status*
 
 ![Read-aloud button](docs/images/read-button.png)
 
@@ -78,7 +117,25 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 ![Engine running](docs/images/engine-running.png)
 
-*The "Running" state after the engine starts*
+*The "Running" state after the local engine starts*
+
+---
+
+## 🌐 Quick Mode (Edge) in detail
+
+- **Voices**: 20+ curated Microsoft natural voices (Chinese Xiaoxiao / Yunxi / Yunye, etc.; English Aria and friends), pick from the panel dropdown — no configuration.
+- **Output**: MP3 audio stream generated by `edge-tts-universal`, saved by `AudioStore` as `.mp3` and served same-origin; the browser decodes it directly (**zero transcoding overhead**).
+- **Health check**: built-in connection timeout, automatic token refresh and error recovery; the panel shows cloud availability.
+- **Rate limit & fallback**: Microsoft may rate-limit heavy usage. If the cloud is detected unavailable, the panel guides you to switch to local GSV (unlimited + cloneable).
+- **Quota field**: `quotaDaily` (default `null` = unlimited) is a reserved guidance field; hard quotas come in a later release.
+
+## 🖥️ Local Pro Mode (GSV) in detail
+
+- **Capability**: **clone a target voice** from a reference audio; fully offline — data never leaves the machine.
+- **Cost**: requires a Python environment + model download; first model load takes ~15–90 s.
+- **Entry points**: see "🔧 Installing the GSV-TTS-Lite Engine" and "🎙️ Adding a Voice / Voice Market".
+
+---
 
 ## 🔧 Installing the GSV-TTS-Lite Engine
 
@@ -113,7 +170,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 
 > **Trust rule**: trust ships with the plugin build. Only the bundled offline manifest marked as trusted installs without confirmation; **any remote manifest always requires a second confirmation** (even if it claims to be trusted). For custom voices, add them manually under "Voice presets".
 
-## 🎙️ Adding a Voice
+## 🎙️ Adding a Voice (local GSV)
 
 1. Open Settings → Voice Settings
 2. Under "Voice presets", click "Add voice"
@@ -149,24 +206,24 @@ Download and inject voices from the Voice Market in one click — no need to fil
 | `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
 | `voices` | Voice preset list | empty |
 
-> Migration note: **existing users keep `gsv` local mode after upgrade — voices unchanged**; fresh installs default to `edge` cloud simple mode (switchable anytime in settings). Edge mode requires network and uses curated Microsoft voices; `quotaDaily` is a reserved guidance field — hard quotas come in a later release.
-
 Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.
 
 ## 🧰 Tools
 
 | Tool | Purpose |
 |------|---------|
-| `tts_speak` | Text-to-speech with voice selection; streaming; returns a same-origin short link |
-| `tts_list_voices` | List configured voice presets |
-| `tts_health_check` | Check engine/API/Python/repo status |
+| `tts_speak` | Text-to-speech; uses the active provider & voice, streams, returns a same-origin short link |
+| `tts_list_voices` | List voices available for the active provider |
+| `tts_health_check` | Check the active provider (engine/cloud) status |
 | `tts_setup_engine` | One-click GSV-TTS-Lite engine installation |
 
 ## ❓ FAQ
 
-- **Engine not running**: Settings → Voice Settings → toggle on (model loading takes ~15–90 s)
+- **How do I hear audio right away?**: Edge mode is the default — no installation at all; just pick a voice in the settings panel. Only Local Pro needs the engine installed.
+- **Engine not running (Local Pro)**: Settings → Voice Settings → toggle on (model loading takes ~15–90 s)
 - **Models missing**: the first start will warn; put the models into the `models` directory
-- **The read button says "engine not started"**: start the engine in Voice Settings first
+- **The read button says "TTS engine not started"**: if you're on local GSV, start the engine in Voice Settings first; if you don't want an engine, switch back to Edge Quick mode
+- **Some cloud voices won't read?**: make sure the network is up; when the cloud channel is limited, switch to local GSV
 - **Reference audio unavailable**: use a local path accessible from the engine host or a reachable URL
 
 ## 🛠️ Tech Stack
@@ -174,7 +231,8 @@ Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings
 - DSH plugin framework: Cordis + `@deepseek-ai/dsh-tools`
 - Config schema: `@deepseek-ai/schemastery`
 - Settings panel: `@deepseek-ai/dsh-settings` + client `settings.section` slots
-- TTS engine: GSV-TTS-Lite 0.4.7
+- Cloud provider: `edge-tts-universal` (Microsoft web voices, MP3 stream)
+- Local engine: GSV-TTS-Lite 0.4.7
 - Languages: TypeScript (host) / hand-written client bundle (browser) / Python (streaming API)
 
 ## 📦 Build & Publish
@@ -197,6 +255,7 @@ Full release history: [CHANGELOG_EN.md](CHANGELOG_EN.md).
 
 - Playback is a clickable markdown link; inline `<audio>` playback needs a client extension (planned)
 - Generated audio lives in the system temp dir (`%TEMP%/dsh-gsv-tts`), purged on startup, capped at 200 files per session
+- Edge cloud mode depends on network; when Microsoft rate-limits, it may be unavailable (already has a downgrade guide)
 - `tts_setup_engine` shells out to pip/git; those tools must be available
 - Empty `promptText` relies on the engine's ASR capability (capability-probed); synthesis fails with a clear error when unsupported
 

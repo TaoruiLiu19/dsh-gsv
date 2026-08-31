@@ -32,13 +32,22 @@ test('EdgeProvider.stream：MP3 块透传 + MIME audio/mpeg，WordBoundary 忽�
   assert.equal(Buffer.from(chunks[0].data).toString(), 'MP3DATA');
 });
 
-test('EdgeProvider.listVoices：精选序优先 + zh-CN/en 兜底，日/韩等小众被过滤', async () => {
+test('EdgeProvider.listVoices：精选序优先 + zh-CN/en 兜底，日/韩等小众被过滤；中文音色显示官方中文名', async () => {
   const ep = new EdgeProvider({ Communicate: okCommunicate(), listVoices: async () => FAKE_VOICES });
-  const ids = (await ep.listVoices()).map((v) => v.id);
+  const voices = await ep.listVoices();
+  const ids = voices.map((v) => v.id);
   assert.equal(ids[0], 'zh-CN-XiaoxiaoNeural', '精选序优先');
   assert.ok(ids.includes('en-US-AriaNeural'));
   assert.ok(ids.includes('zh-CN-shaanxi-XiaoniNeural'), 'zh-CN 方言兜底保留');
   assert.ok(!ids.includes('ja-JP-NanamiNeural'), '日/韩应被过滤');
+  assert.equal(voices.find((v) => v.id === 'zh-CN-XiaoxiaoNeural').name, '晓晓', '中文音色应显示中文名');
+  assert.equal(voices.find((v) => v.id === 'en-US-AriaNeural').name, 'Aria', '英文音色应显示简写名');
+  // 未映射的英文音色：从 FriendlyName 截短（去 "Microsoft … Online" 前缀）
+  const ep2 = new EdgeProvider({
+    Communicate: okCommunicate(),
+    listVoices: async () => [{ ShortName: 'en-GB-RyanNeural', FriendlyName: 'Microsoft Ryan Online (Natural) - English (United Kingdom)', Gender: 'Male', Locale: 'en-GB' }],
+  });
+  assert.equal((await ep2.listVoices())[0].name, 'Ryan');
 });
 
 test('EdgeProvider.health：失败→rateLimited 标记 + 退避期内不重复试合成', async () => {

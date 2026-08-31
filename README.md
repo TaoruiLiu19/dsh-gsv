@@ -1,6 +1,6 @@
 # dsh-gsv-tts
 
-> 为 DSH（DeepSeek Harness）接入 [GSV-TTS-Lite](https://github.com/chinokikiss/GSV-TTS-Lite) 本地 TTS 引擎 —— 音色克隆、流式合成、自动朗读、一键朗读、引擎一键启停，全程本地运行。
+> 为 DSH（DeepSeek Harness）接入语音朗读能力 —— 双模式可选：**云端快速体验**（Edge，免安装、装上即听）+ **本地专业**（GSV-TTS-Lite，音色克隆、完全离线）。
 
 ![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
@@ -14,15 +14,46 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 
 ## ✨ 功能亮点
 
-- 🎙️ **音色克隆**：按参考音频克隆目标音色，`tts_speak` 按名称选用
-- ⚡ **真流式合成**：SSE 逐块合成，首块到达即推送，低首包延迟
-- 🔊 **一键朗读**：每条助手消息旁的 🔊 按钮直接朗读（自动排除思考内容）；长回复**按句分段渐进播放**，带 暂停/继续/停止 与进度显示，正在朗读的消息会高亮
+- 🌐 **云端快速体验（Edge）**：**零配置、装上即用**，无需 Python / 模型 / 引擎；20+ 种免费自然语言音色（晓晓、云希、Aria 等），联网即用，< 1 秒出声
+- 🖥️ **本地专业（GSV）**：按参考音频**克隆目标音色**、**完全离线**；由云端简单模式一键升级引导而来
+- 🔊 **一键朗读**：每条助手消息旁的 🔊 按钮直接朗读（自动排除思考内容）；长回复**按句分段渐进播放**，带暂停/继续/停止与进度显示，正在朗读的消息会高亮
 - 🔁 **自动朗读**：开启后自动朗读助手回复；新回复默认打断当前朗读（barge-in），可在设置中关闭
-- 🎛️ **声音设置面板**：设置 → 声音设置，可视化配置，**保存即热生效**（无需重启）；每条音色可"试听"，或"全部试听"循环对比音色
+- 🔄 **模式切换**：设置面板一键在"快速体验 / 本地专业"间切换，音色与状态实时跟随
+- 🎛️ **声音设置面板**：可视化配置，**保存即热生效**（无需重启）；每条音色可"试听"，或"全部试听"循环对比
 - 🎪 **音色市场**：从内置/自定义远端清单**一键下载并注入音色**，试听后安装、只读托管；内置可信源免确认，远端源二次确认
-- 🚀 **引擎一键启停**：一键启动/停止本地 GSV-TTS-Lite 引擎，模型加载约 15~90 秒
-- 🛠️ **一键安装引擎**：`tts_setup_engine` 自动检测 Python、安装依赖、克隆仓库并启动服务
-- 🔗 **同源音频短链接**：合成音频落盘为 WAV，经 DSH Web 服务同源提供，不再撑爆模型上下文
+- 🚀 **引擎一键启停 / 一键安装**：本地 GSV 引擎启停（模型加载约 15~90 秒）与自动安装，均由设置面板/工具完成
+- 🔗 **同源音频短链接**：合成音频落盘并同源提供，不再撑爆模型上下文
+
+---
+
+## 🎯 快速上手（两种模式，任选其一）
+
+| 你的诉求 | 用哪种 | 怎么开始 |
+|---|---|---|
+| "我就想**装上就能听**" | 🌐 **快速体验（Edge）** | 见下方「一、快速体验模式」——**无需任何安装** |
+| "我要**克隆自己的声音 / 完全离线**" | 🖥️ **本地专业（GSV）** | 见下方「二、本地专业模式」 |
+
+> **默认模式**：全新安装默认为 **Edge 快速体验**（联网即用）；**从旧版本升级的老用户仍保持 GSV 本地模式、声音不变**，可随时在设置面板切换。
+
+### 一、快速体验模式（Edge，新装默认）
+
+1. 安装插件并重启 DSH（见「📦 安装」）
+2. 打开 设置 → 声音设置 → **TTS 模式**选 **快速体验（Edge）**
+3. "音色"下拉选一个云端音色（晓晓 / 云希 / Aria…）
+4. 点任意助手消息旁的 🔊 —— **立即出声，< 1 秒**
+
+> 无需安装 Python、无需模型、无需启动引擎。仅需联网。云端音色标注 🌐，为您提供免配置即听的入口。
+
+### 二、本地专业模式（GSV）
+
+1. 安装插件并重启 DSH（见「📦 安装」）
+2. 打开 设置 → 声音设置 → **TTS 模式**选 **本地专业（GSV）**
+3. **安装引擎**：让 agent 调用 `tts_setup_engine`，或见「🔧 安装 GSV-TTS-Lite 引擎」
+4. **启动引擎**：打开"启动引擎"开关，等待状态变为"运行中"
+5. **添加音色**：在"音色预设"添加，或从「🎪 音色市场」一键下载，或克隆
+6. 点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
+
+> 本地模式全程离线运行，支持音色克隆，不依赖网络与云端配额。
 
 ## 📦 安装
 
@@ -42,12 +73,19 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 > 依赖 DSH 的 `webServer` 服务（Web / Desktop profile 自带）提供音频下载；`settings` 服务提供设置面板。无这些服务的环境仅保留工具能力。
 
-## 🚀 快速开始
+## 🔄 模式切换与迁移
 
-1. **安装引擎**：让 agent 调用 `tts_setup_engine` 自动安装（或见下方手动安装）
-2. **启动引擎**：设置 → 声音设置 → 打开"启动引擎"开关，等待状态变为"运行中"
-3. **添加音色**：设置 → 声音设置 → "音色预设" → 添加音色 → 填写四字段 → 保存
-4. **朗读**：点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
+| 项 | 说明 |
+|---|---|
+| 如何切换 | 设置 → 声音设置 → **TTS 模式**（快速体验 / 本地专业），切换即时生效 |
+| 配置项 | `provider: 'edge' \| 'gsv'`（初始化分派，建议经设置面板切换，勿手动改） |
+| 老用户升级 | 无 `provider` 字段的旧配置 → 保持 `gsv` 本地模式，**声音不变** |
+| 全新安装 | 默认 `edge` 云端简单模式，联网即用 |
+| `schemaVersion` | 配置结构版本，迁移守卫的落点 |
+
+> Edge 模式需联网；若云端不可用，面板会提示"云端通道拥挤 / 暂不可用"，本地 GSV 模式始终可用作降级。
+
+---
 
 ## 🏗️ 系统架构
 
@@ -55,22 +93,23 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 > 📖 交互式架构图：[打开 dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html)（支持缩放、聚焦、主题切换）
 
-**两条调用路径**：
+**双 provider 架构**：`TTSService` 按 `config.provider` 分发到云端（Edge）或本地（GSV），朗读主链路与工具调用两条路径对两种 provider 一致。
 
-- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → 插件从会话中提取消息文本 → `TTSService` 流式请求引擎 → 引擎 SSE 逐块返回音频 → `AudioStore` 拼接 WAV 落盘 → 同源短链接回传浏览器播放。
-- 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行插件逻辑，**不经 webServer HTTP 网关**——图中以虚线表示，与 🔊 按钮路径区分。
+- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → `TTSService` 按 provider 请求 → 云端/本地引擎返回音频块 → `AudioStore` 落盘 → 同源短链接回传浏览器播放。
+- 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行，**不经 webServer HTTP 网关**。
 
 | 构成 | 说明 |
 |------|------|
 | DSH 应用（DeepSeek Harness） | 插件宿主：Web 客户端、webServer、settings 服务 |
-| dsh-gsv-tts 插件 | `TTSService`（流式合成）/ `AudioStore`（WAV 落盘）/ 引擎管理（启停·安装·健康检查） |
-| GSV-TTS-Lite 本地引擎 | 本机 Python 进程，FastAPI :9880，真流式 `/tts/stream` |
+| dsh-gsv-tts 插件 | `TTSService`（按 provider 分发）/ `AudioStore`（落盘）/ 引擎管理（启停·安装·健康检查） |
+| Edge provider | `edge-tts-universal`，微软精选网络音色，返回 MP3 流（浏览器解码） |
+| GSV-TTS-Lite 本地引擎 | 本机 Python 进程，FastAPI :9880，真流式 `/tts/stream`，返回 WAV |
 
 ## 📸 截图
 
 ![声音设置面板](docs/images/settings-voice.png)
 
-*设置 → 声音设置：引擎开关、TTS 配置、帮助文档*
+*设置 → 声音设置：TTS 模式、引擎开关、音色配置、健康状态*
 
 ![朗读按钮](docs/images/read-button.png)
 
@@ -78,9 +117,27 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 ![引擎运行中](docs/images/engine-running.png)
 
-*引擎启动后的"运行中"状态*
+*本地引擎启动后的"运行中"状态*
 
-## 🔧 下载安装 GSV-TTS-Lite 引擎
+---
+
+## 🌐 快速体验模式（Edge）详解
+
+- **音色**：20+ 种微软精选自然音色（中文晓晓 / 云希 / 云野等，英文 Aria 等），面板下拉即选，无需配置。
+- **输出**：MP3 音频流，由 `edge-tts-universal` 生成，经 `AudioStore` 落盘为 `.mp3` 并同源提供，浏览器直接解码（**无转码开销**）。
+- **健康检测**：内置连接超时、令牌自动刷新与错误恢复；面板显示云端可用状态。
+- **限流与降级**：微软可能对过量使用限流。若检测到云端不可用，面板会引导切到本地 GSV（无限量 + 可克隆）。
+- **配额字段**：`quotaDaily`（默认 `null` = 不限量）为预留引导字段，硬配额待后续版本。
+
+## 🖥️ 本地专业模式（GSV）详解
+
+- **能力**：按参考音频**克隆目标音色**；完全离线运行，数据不出本机。
+- **成本**：需安装 Python 环境 + 下载模型；首次模型加载约 15~90 秒。
+- **入口**：见「🔧 安装 GSV-TTS-Lite 引擎」与「🎙️ 添加音色 / 音色市场」。
+
+---
+
+## 🔧 安装 GSV-TTS-Lite 引擎
 
 ### 方式一：自动安装（推荐）
 
@@ -113,7 +170,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 > **信任规则**：信任 = 随插件发版内置。仅包内离线清单且标记可信源时免确认；**任何远端清单一律二次确认**（即便自报可信）。自定义音色请在"音色预设"手工添加。
 
-## 🎙️ 添加音色
+## 🎙️ 添加音色（本地 GSV）
 
 1. 打开 设置 → 声音设置
 2. "音色预设"下点击"添加音色"
@@ -149,33 +206,34 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |
 | `voices` | 音色预设列表 | 空 |
 
-> 迁移说明：**老用户升级后仍为 `gsv` 本地模式、声音不变**；全新安装默认 `edge` 云端简单模式（设置面板可随时切换）。Edge 模式需联网，声音为微软官方精选；`quotaDaily` 为预留引导字段，硬配额留待后续版本。
-
 配置保存在 DSH 的 settings（`~/.dsh/settings.yaml` 的 `dsh-gsv-tts:` 段），修改后插件热生效。
 
 ## 🧰 工具列表
 
 | 工具 | 功能 |
 |------|------|
-| `tts_speak` | 文本转语音，支持按音色选择，流式合成返回同源短链接 |
-| `tts_list_voices` | 列出已配置的音色预设 |
-| `tts_health_check` | 检查引擎/API/Python/仓库状态 |
-| `tts_setup_engine` | 一键安装 GSV-TTS-Lite 引擎 |
+| `tts_speak` | 文本转语音；按当前 provider 与音色选择，流式合成返回同源短链接 |
+| `tts_list_voices` | 列出当前 provider 可用音色 |
+| `tts_health_check` | 检查当前 provider（引擎/云端）状态 |
+| `tts_setup_engine` | 一键安装本地 GSV-TTS-Lite 引擎 |
 
 ## ❓ 常见问题
 
-- **引擎未启动**：设置 → 声音设置 → 打开开关（模型加载约 15~90 秒）
-- **模型缺失**：首次启动会提示，把模型放入 `models` 目录
-- **朗读按钮报"语音引擎未启动"**：先到 声音设置 启动引擎
-- **参考音频不可用**：必须是引擎服务端可访问的本地路径或 URL
+- **装上怎么直接出声？**：默认 Edge 模式，无需任何安装，设置面板选音色即可；本地模式才需要装引擎。
+- **引擎未启动（本地模式）**：设置 → 声音设置 → 打开引擎开关（模型加载约 15~90 秒）。
+- **模型缺失**：首次启动会提示，把模型放入 `models` 目录。
+- **朗读按钮报"语音引擎未启动"**：如果你用的是本地 GSV 模式，先到声音设置启动引擎；不想装引擎就切回 Edge 云端模式。
+- **云端音色有的读不了？**：确认网络畅通；云端通道受限时可切本地 GSV。
+- **参考音频不可用**：必须是引擎服务端可访问的本地路径或 URL。
 
 ## 🛠️ 技术栈
 
 - DSH 插件框架：Cordis + `@deepseek-ai/dsh-tools`
 - 配置 Schema：`@deepseek-ai/schemastery`
 - 设置面板：`@deepseek-ai/dsh-settings` + 客户端 `settings.section` 插槽
-- TTS 引擎：GSV-TTS-Lite 0.4.7
-- 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（流式 API）
+- 云端 Provider：`edge-tts-universal`（微软网络音色，MP3 流）
+- 本地引擎：GSV-TTS-Lite 0.4.7
+- 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（本地流式 API）
 
 ## 📦 构建与发布
 
@@ -197,6 +255,7 @@ pnpm publish      # 发布到 npm（files: lib, scripts, cordis.patch.yml）
 
 - 播放为 markdown 链接点击播放；内嵌 `<audio>` 需客户端扩展（规划中）
 - 合成音频存于系统临时目录（`%TEMP%/dsh-gsv-tts`），启动清空、会话内最多 200 个
+- Edge 云端模式依赖网络；微软限量限流时可能不可用（已有降级引导）
 - `tts_setup_engine` 通过 `child_process` 执行 pip/git，需环境有对应工具
 - `promptText` 留空依赖引擎 ASR 能力（能力探测），不支持时合成报错
 

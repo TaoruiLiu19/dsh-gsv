@@ -2,7 +2,14 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [4.0.0] - 开发中
+## [4.1.0] - 2026-08-31
+
+### Edge 音色体验优化
+- 新增云端（Edge）音色试听路由 `/dsh-gsv-tts/provider/preview`：无论当前处于本地模式还是云端模式，都可直接试听云端音色（`voice` = 云端音色 id，强制走 edge 提供方），面板试听云端音色不再依赖当前 provider
+- Edge 音色显示名本地化：中文音色显示官方中文名（晓晓/云希/云野/晓伊…，方言如 晓北（辽宁）/晓妮（陕西）），主流英文音色显示简写名（Aria/Guy/Emma/Sonia），其余从 FriendlyName 截短（去除 "Microsoft … Online" 前缀）
+- 单测联动更新：中文/英文音色显示名断言 + FriendlyName 截短行为覆盖
+
+## [4.0.0] - 2026-08-31
 
 ### 简单模式（Edge 云端第二 Provider）
 - 双 Provider 抽象：`gsv`（本地克隆/离线专业模式）+ `edge`（微软 Edge 云端简单模式），按 `config.provider` 分发，接口 `{kind, listVoices, stream, health}`

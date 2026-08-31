@@ -20,6 +20,50 @@ const CURATED = [
   'en-US-AriaNeural', 'en-US-GuyNeural', 'en-US-EmmaMultilingualNeural', 'en-GB-SoniaNeural',
 ];
 
+/** 微软 Azure 神经声音的官方中文名（无映射时回退库的 FriendlyName）。 */
+const ZH_NAMES: Record<string, string> = {
+  'zh-CN-XiaoxiaoNeural': '晓晓',
+  'zh-CN-YunxiNeural': '云希',
+  'zh-CN-YunyeNeural': '云野',
+  'zh-CN-XiaoyiNeural': '晓伊',
+  'zh-CN-YunjianNeural': '云健',
+  'zh-CN-YunxiaNeural': '云夏',
+  'zh-CN-XiaochenNeural': '晓辰',
+  'zh-CN-YunyangNeural': '云扬',
+  'zh-CN-YunfengNeural': '云枫',
+  'zh-CN-YunhaoNeural': '云皓',
+  'zh-CN-YunjieNeural': '云杰',
+  'zh-CN-YunzeNeural': '云泽',
+  'zh-CN-XiaohanNeural': '晓涵',
+  'zh-CN-XiaomengNeural': '晓梦',
+  'zh-CN-XiaomoNeural': '晓墨',
+  'zh-CN-XiaoqiuNeural': '晓秋',
+  'zh-CN-XiaoruiNeural': '晓睿',
+  'zh-CN-XiaoshuangNeural': '晓双',
+  'zh-CN-XiaoxiaoDialectsNeural': '晓晓（方言）',
+  'zh-CN-XiaoyouNeural': '晓悠',
+  'zh-CN-liaoning-XiaobeiNeural': '晓北（辽宁）',
+  'zh-CN-shaanxi-XiaoniNeural': '晓妮（陕西）',
+};
+
+/** 主流英文音色的简写名（FriendlyName 太长，下拉/工具里直接用人名）。 */
+const EN_NAMES: Record<string, string> = {
+  'en-US-AriaNeural': 'Aria',
+  'en-US-GuyNeural': 'Guy',
+  'en-US-EmmaMultilingualNeural': 'Emma',
+  'en-GB-SoniaNeural': 'Sonia',
+};
+
+/** 显示名：中文/英文映射优先；其余从 FriendlyName 截短（去 "Microsoft … Online" 前缀）。 */
+function displayName(v: { ShortName: string; FriendlyName?: string }): string {
+  const mapped = ZH_NAMES[v.ShortName] ?? EN_NAMES[v.ShortName];
+  if (mapped) return mapped;
+  const fn = v.FriendlyName ?? '';
+  const m = fn.match(/^Microsoft\s+(.+?)(?:\s+Online\b.*)?$/i);
+  if (m) return m[1].trim();
+  return v.ShortName;
+}
+
 const HEALTH_VOICE = 'zh-CN-XiaoxiaoNeural';
 const HEALTH_TEXT = '你好';
 const HEALTH_TIMEOUT_MS = 8000;
@@ -45,7 +89,12 @@ export class EdgeProvider implements TTSProvider {
     const all = await this.lib.listVoices();
     const byId = new Map<string, VoiceInfo>();
     for (const v of all) {
-      byId.set(v.ShortName, { id: v.ShortName, name: v.FriendlyName ?? v.ShortName, gender: v.Gender ?? '', locale: v.Locale ?? '' });
+      byId.set(v.ShortName, {
+        id: v.ShortName,
+        name: displayName(v),
+        gender: v.Gender ?? '',
+        locale: v.Locale ?? '',
+      });
     }
     const out: VoiceInfo[] = [];
     const seen = new Set<string>();
