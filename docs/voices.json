@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "trusted": true,
   "voices": [
     {
@@ -29,6 +29,20 @@
       "sha256": {
         "speaker": "cd962372d586f48a04c4169f2724d114fe07d962fea0819a0e3a0badd678a5c6",
         "prompt": "cd962372d586f48a04c4169f2724d114fe07d962fea0819a0e3a0badd678a5c6"
+      }
+    },
+    {
+      "id": "cn-yujie",
+      "name": "中文女声·御姐音",
+      "author": "用户提供 (御姐音叫起床)",
+      "license": "用户提供素材 — 分发前需确认授权",
+      "speaker": "https://raw.githubusercontent.com/TaoruiLiu19/gsv-market/main/voices/cn-yujie.mp3",
+      "prompt": "https://raw.githubusercontent.com/TaoruiLiu19/gsv-market/main/voices/cn-yujie.mp3",
+      "promptText": "早上好呀，宝宝。起床喽，乖乖起床喽。别赖床了。等会要迟到了。小懒猪，起来了。再不起来就打你屁屁喽。",
+      "sizeBytes": 396898,
+      "sha256": {
+        "speaker": "daccd476763a6485be880ac6fb9119e77b4320a71db3dcee1f218a85cae27c24",
+        "prompt": "daccd476763a6485be880ac6fb9119e77b4320a71db3dcee1f218a85cae27c24"
       }
     }
   ]
