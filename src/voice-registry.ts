@@ -166,7 +166,7 @@ export class VoiceRegistryManager {
   constructor(
     private opts: {
       getConfig: () => Config;
-      /** 持久化配置补丁（settingsScope.update(patch)），热更新触发 reconfigure */
+      /** 持久化配置补丁（settings.update(ns, patch)），volatile 配置就地热更新 */
       writeConfig: (patch: Partial<Config>) => Promise<void>;
       fetchers?: Partial<RegistryFetchers>;
     },

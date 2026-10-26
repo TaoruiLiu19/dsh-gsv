@@ -25,18 +25,22 @@ export class TTSService {
   private gsv: GsvProvider;
   private edge: EdgeProvider;
 
+  /**
+   * @param getConfig 读取当前生效配置（DSH 0.2+ 设置为 volatile 就地更新，
+   *   因此每次调用都要重新读取，不能缓存配置快照）。
+   */
   constructor(
-    private config: Config,
+    private getConfig: () => Config,
     private audioStore: AudioStore,
     opts?: { voiceManager?: VoiceManager; gsv?: GsvProvider; edge?: EdgeProvider },
   ) {
     this.voiceManager = opts?.voiceManager;
-    this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => config, voiceManager: opts?.voiceManager });
+    this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => this.getConfig(), voiceManager: opts?.voiceManager });
     this.edge = opts?.edge ?? new EdgeProvider();
   }
 
   private provider(kind?: ProviderKind): TTSProvider {
-    return (kind ?? this.config.provider ?? 'gsv') === 'edge' ? this.edge : this.gsv;
+    return (kind ?? this.getConfig().provider ?? 'gsv') === 'edge' ? this.edge : this.gsv;
   }
 
   /** 当前提供方音色列表（gsv = 本地预设；edge = 精选微软声音）。 */
@@ -113,7 +117,7 @@ export class TTSService {
   }
 
   private async synthesizeEdge(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const id = voiceId || this.config.defaultVoice || EDGE_FALLBACK_VOICE;
+    const id = voiceId || this.getConfig().defaultVoice || EDGE_FALLBACK_VOICE;
     const parts: Buffer[] = [];
     for await (const chunk of this.edge.stream(cleanText, id, signal)) {
       if (chunk.mime === 'audio/mpeg' && chunk.data.length > 0) {

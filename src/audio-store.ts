@@ -31,16 +31,29 @@ export class AudioStore {
   private dir: string;
 
   /**
-   * @param baseUrl DSH webServer 的 `http://host:port`；缺省时退回 data URL。
+   * @param originProvider 返回当前 Web 服务同源地址（`http://host:port`）；
+   *   DSH 0.2+ 的 `webServer.getOrigin()` 在监听前会抛错，因此按需读取而不是构造时缓存。
+   *   读不到时退回同源相对路径（浏览器可直接播放）。
    */
-  constructor(private baseUrl?: string) {
+  constructor(private originProvider?: string | (() => string | undefined)) {
     this.dir = join(tmpdir(), 'dsh-gsv-tts');
     mkdirSync(this.dir, { recursive: true });
     this.purgeAll();
   }
 
+  private origin(): string | undefined {
+    if (typeof this.originProvider === 'function') {
+      try {
+        return this.originProvider();
+      } catch {
+        return undefined;
+      }
+    }
+    return this.originProvider;
+  }
+
   get enabled(): boolean {
-    return !!this.baseUrl;
+    return this.origin() !== undefined;
   }
 
   /** 将音频块写成 WAV 文件并返回可播放 URL。 */
@@ -56,9 +69,11 @@ export class AudioStore {
     const file = join(this.dir, name);
     writeFileSync(file, data);
     this.enforceCap();
-    const url = this.baseUrl
-      ? `${this.baseUrl}/dsh-gsv-tts/audio/${name}`
-      : `data:${mimeFor(name)};base64,${data.toString('base64')}`;
+    const origin = this.origin();
+    // 有同源地址时回绝对 URL（工具结果在聊天里也能直接点开）；否则用同源相对路径。
+    const url = origin
+      ? `${origin}/dsh-gsv-tts/audio/${name}`
+      : `/dsh-gsv-tts/audio/${name}`;
     return { url, name };
   }
 

@@ -34,6 +34,8 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 | "我要**克隆自己的声音 / 完全离线**" | 🖥️ **本地专业（GSV）** | 见下方「二、本地专业模式」 |
 
 > **默认模式**：全新安装默认为 **Edge 快速体验**（联网即用）；**从旧版本升级的老用户仍保持 GSV 本地模式、声音不变**，可随时在设置面板切换。
+>
+> **DSH 版本要求**：5.0.0 起适配 **DSH 0.2.1-rc.2+**（`engines.dsh`）。DSH 0.2 把设置改成了 volatile 配置 + 客户端 `configForms` 服务，5.0.0 已同步迁移；DSH 0.1.x 请使用 4.x 版本插件。
 
 ### 一、快速体验模式（Edge，新装默认）
 
@@ -71,7 +73,9 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 安装后重启 DSH，工具自动注册到 agent，设置中出现"声音设置"项。
 
-> 依赖 DSH 的 `webServer` 服务（Web / Desktop profile 自带）提供音频下载；`settings` 服务提供设置面板。无这些服务的环境仅保留工具能力。
+> 依赖 DSH 的 `webServer` 服务（Web / Desktop profile 自带）提供音频下载；`settings` 服务提供设置面板。环境缺少这些服务时仅保留工具能力。
+
+> **从 4.x 升级**：直接安装新版即可，配置自动沿用；首次启动会把 `provider` 落定写回一次（有音色的老配置保持 `gsv`，全新安装为 `edge`），之后设置保存通过 DSH 0.2 的 volatile 配置就地热更新，不再重载插件。
 
 ## 🔄 模式切换与迁移
 
@@ -79,8 +83,9 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 |---|---|
 | 如何切换 | 设置 → 声音设置 → **TTS 模式**（快速体验 / 本地专业），切换即时生效 |
 | 配置项 | `provider: 'edge' \| 'gsv'`（初始化分派，建议经设置面板切换，勿手动改） |
-| 老用户升级 | 无 `provider` 字段的旧配置 → 保持 `gsv` 本地模式，**声音不变** |
-| 全新安装 | 默认 `edge` 云端简单模式，联网即用 |
+| 老用户升级 | 无 `provider` 字段的旧配置：**有音色预设 → 保持 `gsv` 本地模式，声音不变** |
+| 全新安装 | 无音色预设 → 默认 `edge` 云端简单模式，联网即用 |
+| 写入时机 | 首次启动判定后写回一次（`settings.update`），之后不再改写 |
 | `schemaVersion` | 配置结构版本，迁移守卫的落点 |
 
 > Edge 模式需联网；若云端不可用，面板会提示"云端通道拥挤 / 暂不可用"，本地 GSV 模式始终可用作降级。
@@ -208,7 +213,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |
 | `voices` | 音色预设列表 | 空 |
 
-配置保存在 DSH 的 settings（`~/.dsh/settings.yaml` 的 `dsh-gsv-tts:` 段），修改后插件热生效。
+配置保存在当前 profile 的配置层（`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `dsh-gsv-tts:` 条目）。DSH 0.2 起这些字段是 **volatile 配置**：设置面板保存后宿主就地更新配置引用，插件无需重载即可读到新值。
 
 ## 🧰 工具列表
 
@@ -227,12 +232,14 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 - **朗读按钮报"语音引擎未启动"**：如果你用的是本地 GSV 模式，先到声音设置启动引擎；不想装引擎就切回 Edge 云端模式。
 - **云端音色有的读不了？**：确认网络畅通；云端通道受限时可切本地 GSV。
 - **参考音频不可用**：必须是引擎服务端可访问的本地路径或 URL。
+- **DSH 0.1.x 里插件被禁用 / 启动报不兼容**：5.0.0 只支持 DSH 0.2.1-rc.2+，请升级 DSH 或改装 4.x 插件。
+- **声音设置显示"设置不可用"**：当前宿主没有提供设置服务（精简部署）；工具能力仍然可用。
 
 ## 🛠️ 技术栈
 
-- DSH 插件框架：Cordis + `@deepseek-ai/dsh-tools`
-- 配置 Schema：`@deepseek-ai/schemastery`
-- 设置面板：`@deepseek-ai/dsh-settings` + 客户端 `settings.section` 插槽
+- DSH 插件框架：Cordis + `@deepseek-ai/dsh-tools` 0.2.1
+- 配置 Schema：`@deepseek-ai/schemastery`（volatile 字段 + 就地热更新）
+- 设置面板：宿主 `settings` 服务（`describe`/`update`）+ 客户端 `configForms` 服务 + `settings.section` 插槽
 - 云端 Provider：`edge-tts-universal`（微软网络音色，MP3 流）
 - 本地引擎：GSV-TTS-Lite 0.4.7
 - 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（本地流式 API）

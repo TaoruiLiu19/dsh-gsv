@@ -61,14 +61,15 @@ test('设置卡片两遍渲染 hook 数量一致（无 React #310）', () => {
   fibersByPath.clear();
   const effects = [];
   const boundScope = {
-    getSnapshot: () => ({ value: { apiUrl: '', voices: [], defaultVoice: '', autoPlay: false, interruptOnNew: true, timeout: 30000, installDir: './x', voiceRegistryUrl: '' }, writable: true, base: {} }),
+    getSnapshot: () => ({ status: 'ready', value: { apiUrl: '', voices: [], defaultVoice: '', autoPlay: false, interruptOnNew: true, timeout: 30000, installDir: './x', voiceRegistryUrl: '' }, writable: true, base: {} }),
     subscribe: () => () => {}, set: async () => {}, unset: async () => {},
   };
   const registrations = [];
   const disposers = [];
   const ctx = {
     locale: { bind: () => (key) => key, register: () => {} },
-    settingsScope: { bind: () => boundScope },
+    // DSH 0.2+：设置作用域由 configForms 服务提供（旧 settingsScope 已移除）
+    configForms: { get: () => boundScope },
     slots: { inject: (n, fn) => fn(), register: (def, Comp) => { registrations.push({ def, Comp }); return () => {}; } },
     effect: (fn) => { const d = fn(); if (typeof d === 'function') disposers.push(d); },
   };

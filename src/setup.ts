@@ -16,9 +16,24 @@ interface PythonCmd {
 }
 
 export class EngineSetup {
-  constructor(private apiUrl: string, private installDir: string) {}
+  private apiUrl: string;
+  private installDir: string;
+
+  /** @param getConfig 读取当前生效的 apiUrl / installDir（设置为 volatile 就地更新）。 */
+  constructor(private getConfig: () => { apiUrl: string; installDir: string }) {
+    const cfg = getConfig();
+    this.apiUrl = cfg.apiUrl;
+    this.installDir = cfg.installDir;
+  }
+
+  private refresh(): void {
+    const cfg = this.getConfig();
+    this.apiUrl = cfg.apiUrl;
+    this.installDir = cfg.installDir;
+  }
 
   async healthCheck(): Promise<HealthCheckResult> {
+    this.refresh();
     const result: HealthCheckResult = {
       apiRunning: false,
       pythonInstalled: false,
@@ -62,6 +77,7 @@ export class EngineSetup {
   }
 
   async setup(): Promise<SetupResult> {
+    this.refresh();
     const steps: SetupStep[] = [];
     const health = await this.healthCheck();
 

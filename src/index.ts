@@ -8,106 +8,121 @@ import { EngineManager } from './engine-manager.js';
 import { TextCleaner, MAX_SEGMENTED_TEXT_LENGTH } from './text-cleaner.js';
 import { VoiceRegistryManager } from './voice-registry.js';
 import { resolveProvider } from './migration.js';
+import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
 import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
 export const inject = ['tools', 'webServer', 'settings'];
 
+/** 插件 profile 条目 id（= 设置命名空间）；正常安装即包名。 */
+const DEFAULT_ENTRY_ID = 'dsh-gsv-tts';
+
 /** 音色试听固定文案：含长短句、数字与语气词，便于靠耳朵对比音色。 */
 const PREVIEW_TEXT = '这是一段音色试听：你好，欢迎使用本地语音引擎。今天的天气很好，我们出发去爬山吧，一二三四五！';
 
-/** 当前配置结构版本（迁移守卫落点）。 */
-const SCHEMA_VERSION = 1;
+/**
+ * 设置字段统一标记为 volatile（DSH 0.2+）：
+ * 允许在设置面板即时编辑，保存后由宿主就地更新配置引用、不重载插件。
+ * 所有读取都走 snapshotConfig()/readConfig()，因此始终拿到最新值。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const live = (schema: any): any => schema.volatile();
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const Config: any = Schema.object({
-  apiUrl: Schema.string().default('http://localhost:9880').description('GSV-TTS-Lite API 服务地址'),
-  voices: Schema.array(Schema.object({
+  apiUrl: live(Schema.string().default('http://localhost:9880').description('GSV-TTS-Lite API 服务地址')),
+  voices: live(Schema.array(Schema.object({
     name: Schema.string().description('音色名称'),
     speakerAudioPath: Schema.string().description('目标音色参考音频路径').role('path'),
     promptAudioPath: Schema.string().description('提示音频路径（声音克隆必需）').role('path'),
     promptText: Schema.string().description('提示文本（对应提示音频的文字，留空时若引擎支持 ASR 会自动转写，否则合成报错）').default(''),
     id: Schema.string().description('注册表来源 id（注册表安装音色用）').default(''),
     source: Schema.string().description('音色来源：user 自定义 / registry 注册表安装').default('user'),
-  })).default([]).description('音色预设列表，可在设置中自定义'),
-  defaultVoice: Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个）').default(''),
-  autoPlay: Schema.boolean().default(false).description('是否自动朗读助手回复'),
-  interruptOnNew: Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）'),
-  timeout: Schema.number().default(30000).description('请求超时时间（毫秒）'),
-  installDir: Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录'),
-  voiceRegistryUrl: Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）'),
-  schemaVersion: Schema.number().default(SCHEMA_VERSION).description('配置结构版本'),
-  provider: Schema.union([Schema.const('gsv'), Schema.const('edge')]).description('TTS 引擎：gsv 本地专业 / edge 云端简单模式（初始化分派，勿手动改）'),
-  quotaDaily: Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）'),
+  })).default([]).description('音色预设列表，可在设置中自定义')),
+  defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个）').default('')),
+  autoPlay: live(Schema.boolean().default(false).description('是否自动朗读助手回复')),
+  interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）')),
+  timeout: live(Schema.number().min(1).default(30000).description('请求超时时间（毫秒）')),
+  installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
+  voiceRegistryUrl: live(Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）')),
+  schemaVersion: live(Schema.number().default(SCHEMA_VERSION).description('配置结构版本')),
+  provider: live(Schema.union([Schema.const('gsv'), Schema.const('edge')]).description('TTS 引擎：gsv 本地专业 / edge 云端简单模式（初始化分派，勿手动改）')),
+  quotaDaily: live(Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）')),
 });
 
-export function apply(ctx: any, config: PluginConfig) {
-  // 可热更新的运行态：设置面板（settings 命名空间）修改后重建
-  let current: PluginConfig = config;
-  let voiceManager = new VoiceManager(current);
-  let audioStore = new AudioStore(`http://${ctx.webServer.host}:${ctx.webServer.port}`);
-  let tts = new TTSService(current, audioStore, { voiceManager });
-  let setup = new EngineSetup(current.apiUrl, current.installDir);
-  // 引擎进程管理：单实例跨配置热更新存活（避免 reconfigure 丢失子进程引用）
+export function apply(ctx: any, config: any) {
+  /** 当前生效配置快照：DSH 0.2+ 的 volatile 字段是就地更新的引用，每次读取都取最新值。 */
+  const readConfig = (): PluginConfig => snapshotConfig(config);
+  /** 设置命名空间 = profile 条目 id；正常安装即包名。 */
+  const entryId: string = ctx.fiber?.entry?.options?.id ?? DEFAULT_ENTRY_ID;
+
+  /** Web 服务同源地址：监听绑定前 getOrigin() 会抛错，按需读取并兜底为同源相对路径。 */
+  const audioOrigin = (): string | undefined => {
+    try {
+      if (typeof ctx.webServer?.getOrigin === 'function') return ctx.webServer.getOrigin();
+      if (ctx.webServer?.host && ctx.webServer?.port) return `http://${ctx.webServer.host}:${ctx.webServer.port}`;
+    } catch {
+      // 监听尚未绑定：退回同源相对路径
+    }
+    return undefined;
+  };
+
+  const audioStore = new AudioStore(audioOrigin);
+  const voiceManager = new VoiceManager(readConfig);
+  const tts = new TTSService(readConfig, audioStore, { voiceManager });
+  const setup = new EngineSetup(readConfig);
+  // 引擎进程管理：单实例跨配置热更新存活（避免重载丢失子进程引用）
   const engineManager = new EngineManager();
+  const engineCtl = () => {
+    const cfg = readConfig();
+    engineManager.configure(cfg.apiUrl, cfg.installDir);
+    return engineManager;
+  };
 
   // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
   // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。
   const autoPlay = { seq: 0, text: null as string | null };
 
-  const reconfigure = (next: PluginConfig) => {
-    current = next;
-    voiceManager = new VoiceManager(next);
-    tts = new TTSService(next, audioStore, { voiceManager });
-    setup = new EngineSetup(next.apiUrl, next.installDir);
-    engineManager.configure(next.apiUrl, next.installDir);
-  };
-
-  // 设置面板命名空间：base = cordis 配置，settings.yaml 用户层覆盖，变更热生效
-  let settingsScope: any = null;
-  try {
-    settingsScope = ctx.settings.register('dsh-gsv-tts', Config, { base: config });
-    // 4.0.0 迁移守卫：读原始 user 层（describe() 的 user 字段）判定初始 provider，
-    // 老用户保持 gsv、全新安装用 edge；并写回一次使客户端可见。
-    let userLayer: Record<string, unknown> | undefined;
-    try {
-      const desc = ctx.settings.describe?.();
-      userLayer = (Array.isArray(desc) ? desc.find((d: any) => d.ns === 'dsh-gsv-tts') : undefined)?.user;
-    } catch {
-      userLayer = undefined;
-    }
-    const provider = resolveProvider(userLayer);
-    reconfigure({ ...settingsScope.get(), provider });
-    if (userLayer !== undefined && userLayer.provider === undefined) {
-      // 老用户/全新：落定 provider，保证设置面板与运行态一致（幂等）
-      settingsScope.update({ provider, schemaVersion: SCHEMA_VERSION }).catch((e: unknown) => {
-        ctx.logger?.warn?.('dsh-gsv-tts 迁移写回失败', e);
-      });
-    }
-    settingsScope.watch(() => {
+  // 5.0.0 provider 迁移守卫：旧配置没有 provider 字段时落定一次并写回设置，
+  // 之后设置面板切换直接走 settings.update，运行态始终读最新值。
+  ctx.effect(() => {
+    let disposed = false;
+    const run = async () => {
       try {
-        reconfigure(settingsScope.get());
-        ctx.logger?.info?.('dsh-gsv-tts 设置已热更新');
-      } catch (e) {
-        ctx.logger?.warn?.('dsh-gsv-tts 设置应用失败', e);
+        // 等 Loader 挂载完成：设置服务只对已激活条目暴露 describe/update。
+        await ctx.root?.loader?.await?.();
+      } catch {
+        // 精简宿主 / 测试环境没有 loader：直接执行
       }
-    });
-  } catch (e) {
-    ctx.logger?.warn?.('dsh-gsv-tts 设置命名空间注册失败', e);
-  }
+      if (disposed) return;
+      try {
+        const raw = storedProvider(config?.provider);
+        if (raw === 'gsv' || raw === 'edge') return;
+        const provider = resolveProvider(raw, readConfig().voices);
+        await ctx.settings.update(entryId, { provider, schemaVersion: SCHEMA_VERSION });
+        ctx.logger?.info?.('dsh-gsv-tts 已落定 provider=%s', provider);
+      } catch (e) {
+        ctx.logger?.warn?.('dsh-gsv-tts provider 迁移写回失败', e);
+      }
+    };
+    void run();
+    return () => {
+      disposed = true;
+    };
+  }, 'gsv-tts: provider migration');
 
-  // 音色注册表核心（工具与 HTTP 路由共享）：写回走 settingsScope.update → watch 热更新
+  // 音色注册表核心（工具与 HTTP 路由共享）：写回走 settings.update → volatile 配置就地热更新
   const voiceRegistry = new VoiceRegistryManager({
-    getConfig: () => current,
+    getConfig: () => readConfig(),
     writeConfig: async (patch) => {
-      if (!settingsScope) throw new Error('设置服务未就绪，无法写入音色配置');
-      await settingsScope.update(patch);
+      await ctx.settings.update(entryId, patch);
     },
   });
 
   /** 当前 provider 的默认音色：edge → defaultVoice 或空串（服务端回落第一个）；gsv → 本地预设或 null。 */
   const resolveVoice = (): VoicePreset | string | null => {
-    if ((current.provider ?? 'gsv') === 'edge') return current.defaultVoice || '';
+    const cfg = readConfig();
+    if (cfg.provider === 'edge') return cfg.defaultVoice || '';
     const preset = voiceManager.get();
     return preset ?? null;
   };
@@ -115,9 +130,9 @@ export function apply(ctx: any, config: PluginConfig) {
   /** 合成失败分支：gsv 时优先给出"引擎未启动"明确原因；edge 时原样返回云端错误。 */
   const failSynthesis = async (res: any, e: unknown): Promise<void> => {
     const msg = String((e as Error)?.message ?? e);
-    if ((current.provider ?? 'gsv') === 'gsv') {
-      const engine = await engineManager.status();
-      if (!engine.running) {
+    if (readConfig().provider === 'gsv') {
+      const engineStatus = await engineCtl().status();
+      if (!engineStatus.running) {
         res.writeHead(503, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: '语音引擎未启动，请到 设置 → 引擎 打开开关' }));
         return;
@@ -144,7 +159,7 @@ export function apply(ctx: any, config: PluginConfig) {
     path: '/dsh-gsv-tts/engine/status',
     handler: async (_req: any, res: any) => {
       try {
-        json(res, 200, await engineManager.status());
+        json(res, 200, await engineCtl().status());
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
@@ -155,7 +170,7 @@ export function apply(ctx: any, config: PluginConfig) {
     path: '/dsh-gsv-tts/engine/start',
     handler: async (_req: any, res: any) => {
       try {
-        json(res, 200, await engineManager.start());
+        json(res, 200, await engineCtl().start());
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
@@ -166,7 +181,7 @@ export function apply(ctx: any, config: PluginConfig) {
     path: '/dsh-gsv-tts/engine/stop',
     handler: async (_req: any, res: any) => {
       try {
-        json(res, 200, await engineManager.stop());
+        json(res, 200, await engineCtl().stop());
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
@@ -180,7 +195,7 @@ export function apply(ctx: any, config: PluginConfig) {
     path: '/dsh-gsv-tts/provider/voices',
     handler: async (_req: any, res: any) => {
       try {
-        const provider: ProviderKind = current.provider ?? 'gsv';
+        const provider: ProviderKind = readConfig().provider;
         json(res, 200, { provider, voices: await tts.listVoices(provider) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
@@ -193,7 +208,7 @@ export function apply(ctx: any, config: PluginConfig) {
     path: '/dsh-gsv-tts/provider/health',
     handler: async (_req: any, res: any) => {
       try {
-        const provider: ProviderKind = current.provider ?? 'gsv';
+        const provider: ProviderKind = readConfig().provider;
         json(res, 200, { provider, ...(await tts.health(provider)) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
@@ -315,8 +330,8 @@ export function apply(ctx: any, config: PluginConfig) {
           res.end(JSON.stringify({ audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: name }));
         } catch (e: any) {
           // 引擎未启动是最常见失败：给出明确原因
-          const engine = await engineManager.status();
-          if (!engine.running) {
+          const engineStatus = await engineCtl().status();
+          if (!engineStatus.running) {
             res.writeHead(503, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ message: '语音引擎未启动，请到上方打开引擎开关' }));
             return;
@@ -404,11 +419,15 @@ export function apply(ctx: any, config: PluginConfig) {
           res.end(JSON.stringify({ message: '会话不存在' }));
           return;
         }
-        const events = session.events ?? session.eventsSnapshot ?? session.log ?? [];
+        // DSH 0.2+：同步读取整段事件日志请用 snapshotEvents()（events/log 已不再保证存在）。
+        const events: Array<{ type?: string; data?: { message?: { id?: string; content?: Array<{ type?: string; text?: string }> } } }> =
+          typeof session.snapshotEvents === 'function'
+            ? session.snapshotEvents()
+            : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
         let content: Array<{ type?: string; text?: string }> = [];
         for (const ev of events) {
           if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
-            content = ev.data.message.content ?? [];
+            content = ev.data?.message?.content ?? [];
             break;
           }
         }
@@ -488,12 +507,13 @@ export function apply(ctx: any, config: PluginConfig) {
         ];
       },
     },
-    timeoutMs: config.timeout,
+    timeoutMs: readConfig().timeout,
     async execute(args: { text: string; voice?: string }, exec: { signal: AbortSignal }) {
-      if ((current.provider ?? 'gsv') === 'edge') {
+      const cfg = readConfig();
+      if (cfg.provider === 'edge') {
         // 云端简单模式：voice 参数即 Edge 音色 id（不填用 defaultVoice/第一个）
         const r = await tts.synthesize(args.text, args.voice, exec.signal);
-        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || current.defaultVoice || 'edge-default' };
+        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || cfg.defaultVoice || 'edge-default' };
       }
       const preset = voiceManager.get(args.voice);
       if (!preset) {
@@ -540,14 +560,15 @@ export function apply(ctx: any, config: PluginConfig) {
       },
     },
     async execute() {
-      const provider: ProviderKind = current.provider ?? 'gsv';
+      const cfg = readConfig();
+      const provider: ProviderKind = cfg.provider;
       if (provider === 'edge') {
         const voices = (await tts.listVoices('edge')).map((v) => ({
           name: v.name,
           speakerAudioPath: `edge://${v.id}`,
-          isDefault: v.id === current.defaultVoice,
+          isDefault: v.id === cfg.defaultVoice,
         }));
-        return { provider, voices, defaultVoice: current.defaultVoice || '' };
+        return { provider, voices, defaultVoice: cfg.defaultVoice || '' };
       }
       const voices = voiceManager.list().map((v) => ({
         name: v.name,
@@ -770,7 +791,7 @@ export function apply(ctx: any, config: PluginConfig) {
   // 服务端只做"新回复通知"（递增 seq 并暂存清洗后文本），由前端轮询触发合成与播放，
   // 打断/防重叠（barge-in）在前端播放层执行，受 interruptOnNew 开关控制。
   ctx.on('session/event', (session: unknown, event: { type: string; data: { message: { id?: string; content: Array<{ type: string; text?: string }> } } }) => {
-    if (!current.autoPlay) return;
+    if (!readConfig().autoPlay) return;
     if (event.type !== 'assistant/message') return;
     const messageId = event.data.message?.id;
     if (!messageId) return;

@@ -2,6 +2,21 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.0] - 2026-10-26
+
+### Adapted to DSH 0.2.1-rc.2 (breaking)
+- **Runtime**: `engines.dsh: ^0.2.1-rc.2`; peers moved to `@deepseek-ai/dsh-tools@^0.2.1-rc.2` and `@deepseek-ai/schemastery@^3.18.5`. DSH 0.1.x users should stay on 4.x.
+- **Settings service migration**: DSH 0.2 removed `ctx.settings.register()` / `settingsScope` in favor of forms derived from the plugin Config schema:
+  - every `Config` field is now `Schema.volatile()`; the settings panel edits them live and the host updates config references **in place without reloading the plugin**;
+  - the host reads all values through `snapshotConfig()`, which unwraps volatile references (and still accepts plain objects), so each operation sees the latest values;
+  - writes (provider migration, voice-market install/uninstall) now use `ctx.settings.update(entryId, patch)`.
+- **Client service migration**: `settingsScope` → `configForms` (`ctx.configForms.get(ns)`); the settings card now handles `loading` / `unavailable` states instead of rendering blank when the host has no settings service.
+- **Session reads**: `/speak` now uses `session.snapshotEvents()` (DSH 0.2 no longer guarantees `session.events` / `session.log`).
+- **Audio URLs**: `AudioStore` reads `ctx.webServer.getOrigin()` lazily instead of caching `host:port` before the listener binds, and falls back to same-origin relative paths.
+- **provider migration**: with no `provider` field, the plugin resolves "voices present → gsv, none → edge" and persists it once after the loader settles (idempotent).
+- **Plugin manifest**: `dsh.client.inject` now lists packages that exist in DSH 0.2 (client-modules / locale / ui-slots / ui-settings); the removed `dsh-client-runtime` is gone.
+- Added unit coverage for volatile config unwrapping, in-place live updates, and the migration decision; verified with a real DSH 0.2.1 profile boot, settings read/write, and live provider switching.
+
 ## [4.1.0] - 2026-08-31
 
 ### Edge voice experience polish

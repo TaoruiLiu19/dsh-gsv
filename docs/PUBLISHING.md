@@ -10,6 +10,14 @@
 - `keywords` 包含 `"dsh-plugin"`——基于 npm 的市场（dshbase 等）通过 `npm search dsh-plugin` 发现插件。
 - `repository` / `license` / `homepage` / `bugs` 完整——部分爬虫用 `repository` 关联 npm 包与源码仓库。
 
+## DSH 兼容性元数据
+
+DSH 0.2 起，宿主在加载/安装插件前会读取插件清单里的 `engines.dsh`（存在时优先于 `peerDependencies` 里的 `@deepseek-ai/dsh*` 范围）判断兼容性；不满足时会禁用插件并提示升级。
+
+- `engines.dsh` 必须覆盖当前 DSH 运行时版本（含 prerelease），例如 `^0.2.1-rc.2`。
+- `peerDependencies` 里的 `@deepseek-ai/dsh-tools` 等宿主包范围要同步到同一大版本，避免安装出错版 SDK。
+- 升级宿主大版本时（例如 0.2 → 0.3），先更新这两个字段并重新验证启动，再发布新大版本插件。
+
 ## 版本发布步骤
 
 ```sh

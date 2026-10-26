@@ -1,31 +1,36 @@
 import type { VoicePreset, Config } from './types.js';
 
+/**
+ * 音色预设查询。构造时传入配置读取函数而不是配置快照：
+ * DSH 0.2+ 的设置保存是 volatile 就地更新，读函数能始终拿到最新音色列表。
+ */
 export class VoiceManager {
-  private voices: Map<string, VoicePreset> = new Map();
-  private defaultVoice: string;
+  constructor(private getConfig: () => Config) {}
 
-  constructor(config: Config) {
-    this.defaultVoice = config.defaultVoice;
-    for (const v of config.voices) {
-      this.voices.set(v.name, v);
-    }
+  private voices(): VoicePreset[] {
+    const voices = this.getConfig().voices;
+    return Array.isArray(voices) ? voices : [];
   }
 
   list(): VoicePreset[] {
-    return Array.from(this.voices.values());
+    return this.voices();
   }
 
   get(name?: string): VoicePreset | undefined {
-    if (name && this.voices.has(name)) {
-      return this.voices.get(name);
+    const list = this.voices();
+    if (name) {
+      const named = list.find((v) => v.name === name);
+      if (named) return named;
     }
-    if (this.defaultVoice && this.voices.has(this.defaultVoice)) {
-      return this.voices.get(this.defaultVoice);
+    const defaultName = this.getConfig().defaultVoice;
+    if (defaultName) {
+      const fallback = list.find((v) => v.name === defaultName);
+      if (fallback) return fallback;
     }
-    return this.voices.values().next().value;
+    return list[0];
   }
 
   get defaultName(): string {
-    return this.defaultVoice;
+    return this.getConfig().defaultVoice;
   }
 }

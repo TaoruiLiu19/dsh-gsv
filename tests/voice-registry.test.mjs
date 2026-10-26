@@ -133,7 +133,7 @@ test('信任：远端清单 confirm 后完成安装并写回 id/source', async (
   assert.ok(existsSync(config.voices[0].speakerAudioPath), 'speaker 文件应存在');
   assert.ok(existsSync(config.voices[0].promptAudioPath), 'prompt 文件应存在');
   // VoiceManager 立即可用
-  const vm = new VoiceManager(config);
+  const vm = new VoiceManager(() => config);
   assert.equal(vm.get('Test Voice').name, 'Test Voice');
   assert.equal(vm.get('Test Voice').source, 'registry');
 });

@@ -120,7 +120,7 @@ test('TTSService：edge provider 合成保存 .mp3，audioLen=0（时长由浏�
     stream: async function* () { yield { mime: 'audio/mpeg', data: Buffer.from('MP3BYTES') }; },
     health: async () => ({ available: true }),
   };
-  const tts = new TTSService({ ...baseConfig, provider: 'edge', defaultVoice: 'v1' }, store, { edge: FakeEdge });
+  const tts = new TTSService(() => ({ ...baseConfig, provider: 'edge', defaultVoice: 'v1' }), store, { edge: FakeEdge });
   const r = await tts.synthesize('你好');
   assert.ok(r.filename.endsWith('.mp3'));
   assert.equal(r.audioLen, 0);
@@ -138,7 +138,7 @@ test('TTSService：gsv provider 合成保存 .wav 并携带总时长', async () 
     listVoices: async () => [],
     health: async () => ({ available: true }),
   };
-  const tts = new TTSService(baseConfig, store, { gsv: FakeGsv });
+  const tts = new TTSService(() => baseConfig, store, { gsv: FakeGsv });
   const r = await tts.synthesize('你好', { name: 'v', speakerAudioPath: 'a', promptAudioPath: 'b', promptText: '' });
   assert.ok(r.filename.endsWith('.wav'));
   assert.equal(r.audioLen, 3.5);
@@ -146,7 +146,7 @@ test('TTSService：gsv provider 合成保存 .wav 并携带总时长', async () 
 
 test('TTSService：edge 模式拒绝本地预设对象（清晰报错）', async () => {
   const store = new AudioStore('http://host');
-  const tts = new TTSService({ ...baseConfig, provider: 'edge' }, store, { edge: { kind: 'edge', listVoices: async () => [], stream: async function* () {}, health: async () => ({ available: true }) } });
+  const tts = new TTSService(() => ({ ...baseConfig, provider: 'edge' }), store, { edge: { kind: 'edge', listVoices: async () => [], stream: async function* () {}, health: async () => ({ available: true }) } });
   await assert.rejects(
     () => tts.synthesize('你好', { name: 'v', speakerAudioPath: 'a', promptAudioPath: 'b', promptText: '' }),
     /Edge（云端简单）模式不支持本地音色预设/,

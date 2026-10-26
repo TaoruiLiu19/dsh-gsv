@@ -2,6 +2,21 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [5.0.0] - 2026-10-26
+
+### 适配 DSH 0.2.1-rc.2（破坏性变更）
+- **运行环境**：`engines.dsh: ^0.2.1-rc.2`；peer 依赖升级到 `@deepseek-ai/dsh-tools@^0.2.1-rc.2`、`@deepseek-ai/schemastery@^3.18.5`。DSH 0.1.x 请继续使用 4.x。
+- **设置服务迁移**：DSH 0.2 移除了 `ctx.settings.register()` / `settingsScope`，改为「Config Schema 推导表单」：
+  - `Config` 全字段标记 `Schema.volatile()`，设置面板可即时编辑，保存后宿主**就地更新配置引用、不重载插件**；
+  - 运行时统一通过 `snapshotConfig()` 解引用 volatile 配置（兼容普通对象），每次操作读取最新值；
+  - 写回（provider 迁移、音色市场安装/卸载）改走 `ctx.settings.update(entryId, patch)`。
+- **客户端服务迁移**：`settingsScope` → `configForms`（`ctx.configForms.get(ns)`）；设置卡片兼容 `loading` / `unavailable` 状态，不再因设置服务缺失而空白。
+- **会话读取**：`/speak` 改用 `session.snapshotEvents()`（DSH 0.2 不再保证 `session.events` / `session.log`）。
+- **音频地址**：`AudioStore` 改为按需读取 `ctx.webServer.getOrigin()`，避免监听绑定前 `port` 未定义导致的错误地址；无同源地址时退回同源相对路径。
+- **provider 迁移**：无 `provider` 字段时按「有音色 → gsv，无音色 → edge」判定，并在 Loader 就绪后写回一次（幂等）。
+- **插件清单**：`dsh.client.inject` 清理为 DSH 0.2 实际存在的包（client-modules / locale / ui-slots / ui-settings）；移除已不存在的 `dsh-client-runtime`。
+- 新增单测：volatile 配置解引用、就地热更新语义、迁移判定；构建/测试与真实 DSH 0.2.1 profile 启动、设置读写、provider 热切换均通过验证。
+
 ## [4.1.0] - 2026-08-31
 
 ### Edge 音色体验优化

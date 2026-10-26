@@ -34,6 +34,8 @@
 | "I want to **clone my own voice / be fully offline**" | 🖥️ **Local Pro Mode (GSV)** | See "Local Pro Mode (GSV)" below |
 
 > **Default mode**: fresh installs default to **Edge Quick Mode** (works online); **existing users upgrading keep GSV local mode with voices unchanged**, and can switch anytime in the settings panel.
+>
+> **DSH version requirement**: 5.0.0 targets **DSH 0.2.1-rc.2+** (`engines.dsh`). DSH 0.2 replaced its settings API with volatile config plus the client-side `configForms` service; 5.0.0 follows that API. DSH 0.1.x users should stay on the 4.x plugin line.
 
 ### 1. Quick Mode (Edge, default for new installs)
 
@@ -73,14 +75,17 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 > Requires the DSH `webServer` service (bundled with the Web/Desktop profiles) for audio delivery and the `settings` service for the settings panel. Environments without these services keep only the tool capabilities.
 
+> **Upgrading from 4.x**: install the new version and keep your configuration. On the first boot the plugin resolves and persists `provider` once (configs with voices stay `gsv`; fresh installs become `edge`). After that, saving settings goes through DSH 0.2 volatile config and updates in place without reloading the plugin.
+
 ## 🔄 Mode Switching & Migration
 
 | Item | Description |
 |---|---|
 | How to switch | Settings → Voice Settings → **TTS Mode** (Quick / Local Pro), applied instantly |
 | Config field | `provider: 'edge' \| 'gsv'` (assigned at init; switch from the settings panel rather than editing manually) |
-| Existing users upgrading | Old config with no `provider` field → stays `gsv` local mode, **voices unchanged** |
-| Fresh installs | Default to `edge` cloud Quick mode, ready online |
+| Existing users upgrading | Old config with no `provider` field: **voices present → stays `gsv` local mode, voices unchanged** |
+| Fresh installs | No voices → defaults to `edge` cloud Quick mode, ready online |
+| When it is written | Resolved once on first boot and persisted via `settings.update`; never rewritten afterwards |
 | `schemaVersion` | Config schema version — the migration guard marker |
 
 > Edge mode needs network; if the cloud is unavailable, the panel shows "cloud channel busy / temporarily unavailable", and local GSV mode is always available as a fallback.
@@ -208,7 +213,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 | `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
 | `voices` | Voice preset list | empty |
 
-Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings.yaml`) and hot-applied on change.
+Config is stored in the active profile's config layer (the `dsh-gsv-tts:` entry of `~/.dsh/profiles/<profile>/cordis.patch.yml`). Since DSH 0.2 these fields are **volatile config**: a settings save updates the config references in place, so the plugin reads the new values without a reload.
 
 ## 🧰 Tools
 
@@ -227,12 +232,14 @@ Config is stored in DSH settings (the `dsh-gsv-tts:` section of `~/.dsh/settings
 - **The read button says "TTS engine not started"**: if you're on local GSV, start the engine in Voice Settings first; if you don't want an engine, switch back to Edge Quick mode
 - **Some cloud voices won't read?**: make sure the network is up; when the cloud channel is limited, switch to local GSV
 - **Reference audio unavailable**: use a local path accessible from the engine host or a reachable URL
+- **Plugin disabled as incompatible on DSH 0.1.x**: 5.0.0 requires DSH 0.2.1-rc.2+; upgrade DSH or install the 4.x plugin
+- **Voice Settings says "settings unavailable"**: the host provides no settings service (minimal deployment); tool capabilities still work
 
 ## 🛠️ Tech Stack
 
-- DSH plugin framework: Cordis + `@deepseek-ai/dsh-tools`
-- Config schema: `@deepseek-ai/schemastery`
-- Settings panel: `@deepseek-ai/dsh-settings` + client `settings.section` slots
+- DSH plugin framework: Cordis + `@deepseek-ai/dsh-tools` 0.2.1
+- Config schema: `@deepseek-ai/schemastery` (volatile fields with in-place live updates)
+- Settings panel: host `settings` service (`describe`/`update`) + client `configForms` service + `settings.section` slots
 - Cloud provider: `edge-tts-universal` (Microsoft web voices, MP3 stream)
 - Local engine: GSV-TTS-Lite 0.4.7
 - Languages: TypeScript (host) / hand-written client bundle (browser) / Python (streaming API)

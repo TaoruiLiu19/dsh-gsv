@@ -1,13 +1,12 @@
-import type { ProviderKind } from './types.js';
+import type { ProviderKind, VoicePreset } from './types.js';
 
 /**
- * 4.0.0 迁移守卫：读 settings 的**原始 user 层**判定初始 provider（schema 默认值会污染判定）。
- * - user 层不存在（settings.yaml 无 dsh-gsv-tts 段）→ 全新安装 → edge
- * - user 层存在但无 provider → 老用户 → gsv（声音不变）
- * - user.provider 已设置 → 沿用
+ * provider 迁移守卫（5.0.0 起）：配置里没有显式 provider 时落定一次并写回。
+ * - 已有音色预设 → gsv（老用户沿用本地专业模式，声音不变）
+ * - 无音色预设 → edge（全新安装默认云端快速体验）
+ * - 已显式设置（gsv/edge）→ 沿用，不再改写
  */
-export function resolveProvider(user: Record<string, unknown> | undefined): ProviderKind {
-  if (user === undefined) return 'edge';
-  if (user.provider === 'edge' || user.provider === 'gsv') return user.provider;
-  return 'gsv';
+export function resolveProvider(stored: unknown, voices: readonly VoicePreset[]): ProviderKind {
+  if (stored === 'edge' || stored === 'gsv') return stored;
+  return voices.length > 0 ? 'gsv' : 'edge';
 }
