@@ -2,6 +2,14 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [5.0.1] - 2026-10-29
+
+### 音色市场投稿指南
+- 新增中英双语《音色市场投稿指南》：[docs/VOICE_MARKET.md](docs/VOICE_MARKET.md)，包含上传流程、音频要求、许可与授权、审核与上架、安装与常见问题，鼓励用户分享自己喜欢的音色
+- README / README_EN 顶部新增「音色市场」徽章与投稿指南入口；功能亮点补充投稿链接
+- npm 包新增 `docs/VOICE_MARKET.md`（随包分发）
+- 仅文档变更，不涉及运行时代码
+
 ## [5.0.0] - 2026-10-26
 
 ### 适配 DSH 0.2.1-rc.2（破坏性变更）

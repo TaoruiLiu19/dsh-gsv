@@ -7,6 +7,9 @@
 ![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
 [![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
+[![Voice Market](https://img.shields.io/badge/%E9%9F%B3%E8%89%B2%E5%B8%82%E5%9C%BA-Voice%20Market-10b981?style=flat-square)](https://taoruiliu19.github.io/gsv-market/)
+
+音色市场：[taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/gsv-market/) · 投稿指南：[docs/VOICE_MARKET.md](docs/VOICE_MARKET.md)
 
 English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md)
 
@@ -20,7 +23,7 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 - 🔁 **自动朗读**：开启后自动朗读助手回复；新回复默认打断当前朗读（barge-in），可在设置中关闭
 - 🔄 **模式切换**：设置面板一键在"快速体验 / 本地专业"间切换，音色与状态实时跟随
 - 🎛️ **声音设置面板**：可视化配置，**保存即热生效**（无需重启）；每条音色可"试听"，或"全部试听"循环对比
-- 🎪 **音色市场**：从内置/自定义远端清单**一键下载并注入音色**，试听后安装、只读托管；内置可信源免确认，远端源二次确认
+- 🎪 **音色市场**：从内置/自定义远端清单**一键下载并注入音色**，试听后安装、只读托管；内置可信源免确认，远端源二次确认；欢迎[投稿](docs/VOICE_MARKET.md)分享你喜欢的音色
 - 🚀 **引擎一键启停 / 一键安装**：本地 GSV 引擎启停（模型加载约 15~90 秒）与自动安装，均由设置面板/工具完成
 - 🔗 **同源音频短链接**：合成音频落盘并同源提供，不再撑爆模型上下文
 

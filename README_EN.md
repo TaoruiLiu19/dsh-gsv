@@ -7,6 +7,9 @@
 ![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
 [![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
+[![Voice Market](https://img.shields.io/badge/Voice%20Market-dsh--gsv-10b981?style=flat-square)](https://taoruiliu19.github.io/gsv-market/)
+
+Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/gsv-market/) · Submission guide: [docs/VOICE_MARKET.md](docs/VOICE_MARKET.md)
 
 中文 README: [README.md](README.md) · Changelog: [CHANGELOG_EN.md](CHANGELOG_EN.md)
 
@@ -20,7 +23,7 @@
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
-- 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation
+- 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation; [submit your favorite voices](docs/VOICE_MARKET.md)
 - 🚀 **One-click engine start/stop & setup**: local GSV engine control (model loading ~15–90 s) and auto-install, all from the settings panel / tools
 - 🔗 **Same-origin audio short links**: synthesized audio is saved and served same-origin — no more giant data URLs in the model context
 

@@ -2,6 +2,14 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.0.1] - 2026-10-29
+
+### Voice market submission guide
+- Added a bilingual voice market submission guide: [docs/VOICE_MARKET.md](docs/VOICE_MARKET.md) — upload flow, audio requirements, licensing and consent, review and publishing, installation, and FAQ; encourages sharing favorite voices
+- README / README_EN now show a Voice Market badge and a submission-guide link at the top; the feature list links to the guide
+- npm package now includes `docs/VOICE_MARKET.md`
+- Documentation only; no runtime code changes
+
 ## [5.0.0] - 2026-10-26
 
 ### Adapted to DSH 0.2.1-rc.2 (breaking)

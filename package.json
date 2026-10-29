@@ -1,6 +1,6 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "5.0.0",
+  "version": "5.0.1",
   "description": "DSH plugin for local GSV-TTS-Lite voice cloning + Edge cloud simple mode: voice presets, auto-read, engine setup assistant, read-aloud button, settings panel",
   "keywords": [
     "dsh-plugin",
@@ -42,6 +42,7 @@
     "docs/voices.json",
     "docs/images",
     "docs/PUBLISHING.md",
+    "docs/VOICE_MARKET.md",
     "README.md",
     "README_EN.md",
     "CHANGELOG.md",
