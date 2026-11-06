@@ -5,7 +5,7 @@ All notable changes to dsh-gsv-tts are documented in this file. Format based on 
 ## [5.1.0] - 2026-11-06
 
 ### Faster first audio (local GSV)
-- **Read-aloud now uses a streaming WAV**: playback starts as soon as the engine emits its first chunk, instead of waiting for the whole reply to be segmented and synthesized; a 300-character reply went from ~38 s to ~2–3 s to first audio in our tests (varies by machine and length)
+- **Read-aloud now uses a streaming WAV**: playback starts as soon as the engine emits its first chunk, instead of waiting for the whole reply to be segmented and synthesized; first audio on long replies is much faster (Always-on: faster; Eco: slower on the first use because the model loads)
 - **Inference warm-up** after engine start avoids the extra CUDA/lazy-init cost on the first real request
 - **New `/warmup` endpoint**: caches speaker/prompt features and runs a short inference; the plugin pre-warms the default voice once the engine is ready
 - **New `engineMode` setting**: **Always-on (performance)** auto-starts and pre-warms on plugin load; **Eco (resources first, default)** does not run in the background (same as before). Always-on holds ~0.9 GB VRAM + 0.5 GB RAM

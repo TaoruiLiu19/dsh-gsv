@@ -17,10 +17,10 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 
 ## ✨ Features
 
-- 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and < 1 s to first audio
+- 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and fast to first audio
 - 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **streamed** (first chunk starts playback; no need to wait for the whole reply), with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
-- ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, cutting first audio on long replies from ~38 s to ~2–3 s in our tests. The default **Eco mode (resources first)** does not run in the background, same as before
+- ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, so first audio on long replies is much faster. The default **Eco mode (resources first)** does not run in the background, same as before
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
@@ -46,7 +46,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 1. Install the plugin and restart DSH (see "📦 Installation")
 2. Open Settings → Voice Settings → **TTS Mode** → select **Quick (Edge)**
 3. Pick a cloud voice from the "Voice" dropdown (Xiaoxiao / Yunxi / Aria…)
-4. Click the 🔊 next to any assistant message — **audio plays immediately, < 1 s**
+4. Click the 🔊 next to any assistant message — **audio starts quickly**
 
 > No Python, no models, no engine to start. Only a network connection is required. Cloud voices are marked 🌐, giving you a zero-config path to listening right away.
 
@@ -55,7 +55,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 1. Install the plugin and restart DSH (see "📦 Installation")
 2. Open Settings → Voice Settings → **TTS Mode** → select **Local Pro (GSV)**
 3. **Install the engine**: have the agent call `tts_setup_engine`, or see "🔧 Installing the GSV-TTS-Lite Engine"
-4. **Choose engine startup**: the default **Eco mode (resources first)** does not start in the background; turn the engine on manually (15–90 s) or switch to **Always-on (performance)** to auto-start and pre-warm (first read ~2–3 s)
+4. **Choose engine startup**: the default **Eco mode (resources first)** does not start in the background; turn the engine on manually first (first audio is slower) or switch to **Always-on (performance)** to auto-start and pre-warm (first audio is faster)
 5. **Add a voice**: add one under "Voice presets", or one-click download from the "🎪 Voice Market", or clone one
 6. Click the 🔊 next to any assistant message, or have the agent call `tts_speak`
 
@@ -220,10 +220,10 @@ Download and inject voices from the Voice Market in one click — no need to fil
 
 ### Choosing an engine startup mode
 
-| Mode | First read | Idle cost | Best for |
+| Mode | First audio | Idle cost | Best for |
 |---|---|---|---|
-| **Eco (resources first, default)** | Start the engine manually first (15–90 s load) | No VRAM/RAM held | Occasional reading, gaming, battery; same as before |
-| **Always-on (performance)** | ~2–3 s | ~0.9 GB VRAM + 0.5 GB RAM | Frequent reading, desktop/plugged in |
+| **Eco (resources first, default)** | Slower (start the engine first) | No VRAM/RAM held | Occasional reading, gaming, battery; same as before |
+| **Always-on (performance)** | Faster | ~0.9 GB VRAM + 0.5 GB RAM | Frequent reading, desktop/plugged in |
 
 > Always-on starts and pre-warms the engine when the plugin loads. Eco never auto-starts; turn the engine on in Voice Settings (or start it after `tts_setup_engine`).
 
