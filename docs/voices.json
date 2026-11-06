@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "trusted": true,
   "voices": [
     {
@@ -44,6 +44,23 @@
         "speaker": "daccd476763a6485be880ac6fb9119e77b4320a71db3dcee1f218a85cae27c24",
         "prompt": "daccd476763a6485be880ac6fb9119e77b4320a71db3dcee1f218a85cae27c24"
       }
+    },
+    {
+      "id": "voice-5cadda94",
+      "name": "绘梨衣",
+      "author": "Sakura",
+      "license": "作者明确授权分发",
+      "speaker": "https://taoruiliu19.github.io/gsv-market/voices/voice-5cadda94.mp3",
+      "prompt": "https://taoruiliu19.github.io/gsv-market/voices/voice-5cadda94.mp3",
+      "promptText": "我们都是小怪兽，有一天会被正义的奥特曼杀死。我们都是小怪兽，有一天会被正义的奥特曼杀死。\\n今天能不能出去玩，知道了，我该睡觉了。晚安，过会儿我就要回家了，可以再陪我玩一会儿吗？能带我出去玩吗？迪士尼就好",
+      "sizeBytes": 240620,
+      "sha256": {
+        "speaker": "5cadda94f93acb192fdfc06780a7e3b4135bc6654799e4482b6731f7fb88ba71",
+        "prompt": "5cadda94f93acb192fdfc06780a7e3b4135bc6654799e4482b6731f7fb88ba71"
+      },
+      "tags": [],
+      "language": "zh-CN",
+      "reviewed": true
     }
   ]
 }
