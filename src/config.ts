@@ -59,6 +59,7 @@ export function snapshotConfig(raw: unknown): Config {
     voices: list,
     defaultVoice: readConfigValue(source.defaultVoice, ''),
     autoPlay: readConfigValue(source.autoPlay, false),
+    autoStart: readConfigValue(source.autoStart, true),
     interruptOnNew: readConfigValue(source.interruptOnNew, true),
     // AbortSignal.timeout / 工具 timeoutMs 都要求正数：非法值回退默认，避免旧配置把插件弄挂
     timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : 30000,

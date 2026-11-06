@@ -88,7 +88,7 @@ export class EngineManager {
     });
 
     // 等待就绪（模型加载可能较慢）
-    const ready = await this.waitForReady(90000);
+    const ready = await this.waitForReady(120000);
     if (ready) return { ok: true, running: true, message: '引擎已启动' };
     return {
       ok: false,
@@ -143,7 +143,7 @@ export class EngineManager {
       } catch {
         // 未就绪
       }
-      await new Promise((r) => setTimeout(r, 3000));
+      await new Promise((r) => setTimeout(r, 500));
     }
     return false;
   }

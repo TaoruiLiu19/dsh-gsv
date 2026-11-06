@@ -21,7 +21,7 @@ function markSentenceBoundaries(text: string): string {
     .replace(/(、)/g, '$1' + SENT);
 }
 
-export function splitIntoSegments(text: string, maxChars = 800): string[] {
+export function splitIntoSegments(text: string, maxChars = 800, firstMaxChars = 0): string[] {
   const t = (text ?? '').trim();
   if (!t) return [];
 
@@ -42,6 +42,22 @@ export function splitIntoSegments(text: string, maxChars = 800): string[] {
     }
   };
 
+  // 首段单独处理：更短、尽量落在逗号/分号等自然停顿处，降低首次出声延迟。
+  if (firstMaxChars > 0 && atoms.length > 0) {
+    let head = atoms.shift()!;
+    if (head.length > firstMaxChars) {
+      const cut = findNaturalCut(head, firstMaxChars);
+      const rest = head.slice(cut).trim();
+      head = head.slice(0, cut).trim();
+      if (rest) atoms.unshift(rest);
+    } else {
+      while (atoms.length > 0 && head.length + atoms[0].length <= firstMaxChars) {
+        head += atoms.shift()!;
+      }
+    }
+    if (head) segments.push(head);
+  }
+
   for (const atom of atoms) {
     if (atom.length > maxChars) {
       // 单句超长：先吐掉缓冲，再把这一句硬切
@@ -58,4 +74,15 @@ export function splitIntoSegments(text: string, maxChars = 800): string[] {
   }
   flush();
   return segments;
+}
+
+/** 在 limit 内找最靠后的自然停顿（逗号/分号等）；找不到或太靠前则硬切。 */
+function findNaturalCut(text: string, limit: number): number {
+  const window = text.slice(0, limit);
+  let cut = -1;
+  for (const ch of ['。', '！', '？', '…', '；', ';', '!', '?', '，', ',', '、']) {
+    const index = window.lastIndexOf(ch);
+    if (index >= 0) cut = Math.max(cut, index + 1);
+  }
+  return cut >= 8 ? cut : Math.min(limit, text.length);
 }

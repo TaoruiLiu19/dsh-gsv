@@ -19,12 +19,13 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 
 - 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and < 1 s to first audio
 - 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
-- 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **split into sentence segments and played progressively**, with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
+- 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **streamed** (first chunk starts playback; no need to wait for the whole reply), with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
+- ⚡ **Faster first audio**: local mode auto-starts the engine in the background and pre-warms the default voice; read-aloud uses a **streaming WAV**, cutting first audio on long replies from ~38 s to ~2–3 s in our tests (depends on hardware and reply length)
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
 - 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation; [submit your favorite voices](docs/VOICE_MARKET.md)
-- 🚀 **One-click engine start/stop & setup**: local GSV engine control (model loading ~15–90 s) and auto-install, all from the settings panel / tools
+- 🚀 **One-click engine start/stop & setup**: starts and pre-warms in the background by default (`autoStart` can be disabled); manual control and auto-install remain available, model loading ~15–90 s
 - 🔗 **Same-origin audio short links**: synthesized audio is saved and served same-origin — no more giant data URLs in the model context
 
 ---
@@ -54,7 +55,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 1. Install the plugin and restart DSH (see "📦 Installation")
 2. Open Settings → Voice Settings → **TTS Mode** → select **Local Pro (GSV)**
 3. **Install the engine**: have the agent call `tts_setup_engine`, or see "🔧 Installing the GSV-TTS-Lite Engine"
-4. **Start the engine**: toggle "Start engine" on and wait until it shows "Running"
+4. **Start the engine**: it auto-starts and pre-warms in the background by default; you can also toggle it manually (disable `autoStart` to require a manual start)
 5. **Add a voice**: add one under "Voice presets", or one-click download from the "🎪 Voice Market", or clone one
 6. Click the 🔊 next to any assistant message, or have the agent call `tts_speak`
 
@@ -204,6 +205,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 |-------|-------------|---------|
 | TTS Mode | Quick (Edge cloud, zero setup) / Local Pro (GSV, offline & cloning) | existing users `gsv` / fresh installs `edge` |
 | Engine switch | Start/stop the GSV-TTS-Lite engine process | Off |
+| `autoStart` | Start the engine and pre-warm the default voice in the background on plugin load (gsv mode) | `true` |
 | `apiUrl` | Engine API URL | `http://localhost:9880` |
 | `defaultVoice` | Default voice (gsv=preset name / edge=cloud voice id; empty = first) | empty |
 | `timeout` | Request timeout (ms) | `30000` |

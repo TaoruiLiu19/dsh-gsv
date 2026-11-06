@@ -14,6 +14,8 @@ export interface Config {
   voices: VoicePreset[];
   defaultVoice: string;
   autoPlay: boolean;
+  /** 插件激活时是否后台启动本地引擎并预热默认音色 */
+  autoStart: boolean;
   /** 新回复到来时是否打断当前朗读（false = 正在朗读时跳过新回复，避免叠音） */
   interruptOnNew: boolean;
   timeout: number;

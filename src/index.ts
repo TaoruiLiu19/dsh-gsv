@@ -1,5 +1,7 @@
 import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
+import { randomUUID } from 'node:crypto';
+import { once } from 'node:events';
 import { TTSService } from './tts.service.js';
 import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
@@ -9,6 +11,7 @@ import { TextCleaner, MAX_SEGMENTED_TEXT_LENGTH } from './text-cleaner.js';
 import { VoiceRegistryManager } from './voice-registry.js';
 import { resolveProvider } from './migration.js';
 import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
+import { wavHeader, float32ToInt16 } from './wav-stream.js';
 import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
@@ -41,6 +44,7 @@ export const Config: any = Schema.object({
   })).default([]).description('音色预设列表，可在设置中自定义')),
   defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个）').default('')),
   autoPlay: live(Schema.boolean().default(false).description('是否自动朗读助手回复')),
+  autoStart: live(Schema.boolean().default(true).description('插件加载时后台启动本地引擎并预热默认音色（gsv 模式）')),
   interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）')),
   timeout: live(Schema.number().min(1).default(30000).description('请求超时时间（毫秒）')),
   installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
@@ -78,6 +82,36 @@ export function apply(ctx: any, config: any) {
     engineManager.configure(cfg.apiUrl, cfg.installDir);
     return engineManager;
   };
+
+  // 引擎启动后预热默认音色：缓存 speaker/prompt 特征 + 一次短推理，
+  // 让用户第一次点朗读时不再付首次特征计算/首次推理的开销。
+  const prewarmDefaultVoice = async (): Promise<void> => {
+    const cfg = readConfig();
+    if (cfg.provider !== 'gsv') return;
+    const preset = voiceManager.get();
+    if (!preset) return;
+    try {
+      await tts.warmupVoice(preset);
+    } catch {
+      // 预热失败不影响正常使用
+    }
+  };
+
+  // 插件加载时后台拉起引擎（默认开启，可在设置里关闭），把 15–90 秒模型加载移出点击路径。
+  let autoStartStarted = false;
+  const autoStartEngine = async (): Promise<void> => {
+    if (autoStartStarted) return;
+    autoStartStarted = true;
+    const cfg = readConfig();
+    if (cfg.provider !== 'gsv' || !cfg.autoStart) return;
+    try {
+      const result = await engineCtl().start();
+      if (result.ok) void prewarmDefaultVoice();
+    } catch {
+      // 引擎启动失败时保持原状，用户仍可手动启动
+    }
+  };
+  setTimeout(() => { void autoStartEngine(); }, 1500);
 
   // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
   // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。
@@ -149,10 +183,148 @@ export function apply(ctx: any, config: any) {
     handler: (req: any, res: any) => audioStore.serve(req, res),
   }));
 
+  // 流式朗读：返回未知长度的 WAV，浏览器 <audio> 边下边播；断开即中断引擎。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: '/dsh-gsv-tts/speak/stream',
+    handler: async (req: any, res: any) => {
+      const token = new URL(String(req.url ?? '/'), 'http://localhost').searchParams.get('token') ?? '';
+      const entry = streamTokens.get(token);
+      if (!entry || entry.expires < Date.now()) {
+        streamTokens.delete(token);
+        json(res, 404, { message: '朗读流已过期，请重新点击朗读' });
+        return;
+      }
+      streamTokens.delete(token);
+
+      const ac = new AbortController();
+      let closed = false;
+      res.on?.('close', () => {
+        closed = true;
+        ac.abort();
+      });
+      try {
+        let headerSent = false;
+        for await (const chunk of tts.streamPcm(entry.text, entry.voice, ac.signal)) {
+          if (closed) break;
+          if (!headerSent) {
+            res.writeHead(200, {
+              'Content-Type': 'audio/wav',
+              'Cache-Control': 'no-store',
+              'X-Accel-Buffering': 'no',
+              'Accept-Ranges': 'none',
+            });
+            res.write(wavHeader(chunk.sampleRate));
+            headerSent = true;
+          }
+          if (!res.write(float32ToInt16(chunk.data))) {
+            await Promise.race([once(res, 'drain'), once(res, 'close')]);
+          }
+        }
+        if (closed) {
+          try { res.end(); } catch { /* 已断开 */ }
+          return;
+        }
+        if (!headerSent) {
+          json(res, 500, { message: '引擎没有返回音频数据' });
+          return;
+        }
+        res.end();
+      } catch (e: any) {
+        if (!res.headersSent) json(res, 500, { message: String(e?.message ?? e) });
+        else {
+          try { res.end(); } catch { /* 已断开 */ }
+        }
+      }
+    },
+  }));
+
   // 引擎启停（设置 → 引擎 开关调用）
   const json = (res: any, status: number, body: unknown) => {
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
+  };
+
+  /** 客户端是否请求流式 WAV（<audio> 直接播放，首音≈引擎首块）。 */
+  const wantsWavStream = (req: any): boolean => {
+    const accept = String(req?.headers?.accept ?? '');
+    const url = String(req?.url ?? '');
+    return accept.includes('audio/wav') || /[?&]stream=wav(?:&|$)/.test(url);
+  };
+
+  // 流式 WAV 的一次性令牌：POST /speak 只做文本/音色解析并返回 URL，
+  // 真正的合成为 GET，浏览器 <audio> 可边下边播，且不会把长文本塞进 URL。
+  const streamTokens = new Map<string, { text: string; voice: VoicePreset; expires: number }>();
+  const createStreamToken = (text: string, voice: VoicePreset): string => {
+    const now = Date.now();
+    for (const [key, value] of streamTokens) {
+      if (value.expires < now || streamTokens.size > 64) streamTokens.delete(key);
+    }
+    const token = randomUUID();
+    streamTokens.set(token, { text, voice, expires: now + 60000 });
+    return token;
+  };
+
+  /** 客户端是否请求流式朗读（NDJSON）。 */
+  const wantsStream = (req: any): boolean => {
+    const accept = String(req?.headers?.accept ?? '');
+    const url = String(req?.url ?? '');
+    return accept.includes('application/x-ndjson') || /[?&]stream=1(?:&|$)/.test(url);
+  };
+
+  /**
+   * 流式朗读：按段合成，每段完成立刻以 NDJSON 推给浏览器。
+   * 首段完成即可开始播放，不必等整条回复全部分段合成完。
+   */
+  const streamSegments = async (req: any, res: any, text: string, voice: VoicePreset | string): Promise<void> => {
+    let parts: string[];
+    try {
+      parts = tts.planSegments(text);
+    } catch (e: any) {
+      json(res, 400, { message: String(e?.message ?? e) });
+      return;
+    }
+    const ac = new AbortController();
+    let closed = false;
+    const onClose = () => {
+      // 客户端停止/切歌/关页：中断引擎，避免旧请求占着推理锁
+      closed = true;
+      ac.abort();
+    };
+    res.on?.('close', onClose);
+    res.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'Connection': 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    const send = (obj: Record<string, unknown>) => {
+      if (closed) return;
+      try {
+        res.write(JSON.stringify(obj) + '\n');
+      } catch {
+        // 连接已断，交给 close 事件收尾
+      }
+    };
+    send({ type: 'start', total: parts.length });
+    let totalLen = 0;
+    try {
+      for (let i = 0; i < parts.length; i++) {
+        const r = await tts.synthesize(parts[i], voice, ac.signal);
+        totalLen += r.audioLen;
+        send({ type: 'segment', index: i, total: parts.length, url: r.audioUrl, duration: r.audioLen });
+      }
+      send({ type: 'done', totalLen });
+    } catch (e: any) {
+      if (!ac.signal.aborted) send({ type: 'error', message: String(e?.message ?? e) });
+    } finally {
+      res.off?.('close', onClose);
+      try {
+        res.end();
+      } catch {
+        // 已关闭
+      }
+    }
   };
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
@@ -170,7 +342,9 @@ export function apply(ctx: any, config: any) {
     path: '/dsh-gsv-tts/engine/start',
     handler: async (_req: any, res: any) => {
       try {
-        json(res, 200, await engineCtl().start());
+        const result = await engineCtl().start();
+        if (result.ok) void prewarmDefaultVoice();
+        json(res, 200, result);
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
@@ -272,6 +446,15 @@ export function apply(ctx: any, config: any) {
         if (voice === null) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ message: '未配置音色' }));
+          return;
+        }
+        if (wantsWavStream(req) && typeof voice !== 'string') {
+          const token = createStreamToken(autoPlay.text, voice);
+          json(res, 200, { streamUrl: `/dsh-gsv-tts/speak/stream?token=${token}`, voiceUsed: voice.name });
+          return;
+        }
+        if (wantsStream(req)) {
+          await streamSegments(req, res, autoPlay.text, voice);
           return;
         }
         try {
@@ -457,6 +640,15 @@ export function apply(ctx: any, config: any) {
         if (voice === null) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ message: '未配置音色' }));
+          return;
+        }
+        if (wantsWavStream(req) && typeof voice !== 'string') {
+          const token = createStreamToken(text, voice);
+          json(res, 200, { streamUrl: `/dsh-gsv-tts/speak/stream?token=${token}`, voiceUsed: voice.name });
+          return;
+        }
+        if (wantsStream(req)) {
+          await streamSegments(req, res, text, voice);
           return;
         }
         try {

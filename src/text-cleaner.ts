@@ -2,8 +2,10 @@
 export const MAX_TEXT_LENGTH = 6000;
 /** 分段合成（朗读按钮 / 自动朗读）的清洗后长度上限（分段本身按句切分）。 */
 export const MAX_SEGMENTED_TEXT_LENGTH = 30000;
-/** 单段最大字符数（超过则按句打包时硬切）。 */
-export const SEGMENT_MAX_CHARS = 800;
+/** 首段最大字符数：更短以便尽快出声（约 3–5 秒音频）。 */
+export const FIRST_SEGMENT_MAX_CHARS = 30;
+/** 后续单段最大字符数：兼顾引擎单请求超时（默认 30 秒）与逐段请求开销。 */
+export const SEGMENT_MAX_CHARS = 150;
 
 export class TextCleaner {
   static clean(text: string): string {

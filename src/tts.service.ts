@@ -1,4 +1,4 @@
-import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS } from './text-cleaner.js';
+import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS } from './text-cleaner.js';
 import { splitIntoSegments } from './segmenter.js';
 import { GsvProvider } from './providers/gsv.js';
 import { EdgeProvider } from './providers/edge.js';
@@ -53,6 +53,11 @@ export class TTSService {
     return this.provider(kind).health();
   }
 
+  /** 预热指定音色（缓存 speaker/prompt + 短推理），失败静默。 */
+  warmupVoice(preset: VoicePreset): Promise<boolean> {
+    return this.gsv.warmup(preset);
+  }
+
   /** 单次合成整段（tts_speak / 试听路径）。voice 可为预设对象（gsv）或音色 id（edge）。 */
   async synthesize(
     text: string,
@@ -77,14 +82,19 @@ export class TTSService {
     return this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
   }
 
-  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按 provider 逐段合成，段间 0 静音。 */
-  async synthesizeSegments(text: string, voice?: VoicePreset | string, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
+  /** 清洗并切分朗读文本：首段更短，后续段按 SEGMENT_MAX_CHARS 打包。 */
+  planSegments(text: string): string[] {
     const cleanText = TextCleaner.clean(text);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
     }
-    const parts = splitIntoSegments(cleanText, SEGMENT_MAX_CHARS);
+    return splitIntoSegments(cleanText, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS);
+  }
+
+  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按 provider 逐段合成，段间 0 静音。 */
+  async synthesizeSegments(text: string, voice?: VoicePreset | string, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
+    const parts = this.planSegments(text);
     const segments: TTSAudioSegment[] = [];
     let totalLen = 0;
     let error: string | undefined;
@@ -100,6 +110,44 @@ export class TTSService {
       }
     }
     return { segments, totalLen, error };
+  }
+
+  /**
+   * 流式分段合成：每完成一段就 yield，调用方可以立刻把 URL 交给浏览器播放，
+   * 无需等整条回复全部分段合成完（首音时间从"全部段落"降到"首段"）。
+   */
+  async *synthesizeSegmentsStream(
+    text: string,
+    voice?: VoicePreset | string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ index: number; total: number; url: string; duration: number }> {
+    const parts = this.planSegments(text);
+    for (let i = 0; i < parts.length; i++) {
+      const r = await this.synthesize(parts[i], voice, signal);
+      yield { index: i, total: parts.length, url: r.audioUrl, duration: r.audioLen };
+    }
+  }
+
+  /**
+   * 流式 PCM：把整段文本交给引擎一次合成，逐块产出 float32 PCM。
+   * 用于"边合成边播放"的 WAV 流（首音≈引擎首块，不再等全部分段）。
+   * 不设超时：由调用方在客户端断开时 abort。
+   */
+  async *streamPcm(
+    text: string,
+    voice: VoicePreset,
+    signal?: AbortSignal,
+  ): AsyncGenerator<{ sampleRate: number; data: Buffer }> {
+    const cleanText = TextCleaner.clean(text);
+    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
+    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
+      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
+    }
+    for await (const chunk of this.gsv.streamWithPreset(cleanText, voice, signal, { timeoutMs: 0 })) {
+      if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate && chunk.data.length > 0) {
+        yield { sampleRate: chunk.sampleRate, data: Buffer.from(chunk.data) };
+      }
+    }
   }
 
   private async synthesizeGsv(cleanText: string, preset: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {

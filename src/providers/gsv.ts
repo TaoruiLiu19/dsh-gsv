@@ -28,6 +28,27 @@ export class GsvProvider implements TTSProvider {
     return { available: true };
   }
 
+  /** 预热指定音色：让引擎缓存 speaker/prompt 特征并跑一次短推理。 */
+  async warmup(preset: VoicePreset, timeoutMs = 120000): Promise<boolean> {
+    if (!preset.speakerAudioPath || !preset.promptAudioPath) return false;
+    const cfg = this.opts.getConfig();
+    try {
+      const resp = await fetch(`${cfg.apiUrl}/warmup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          speaker_audio: preset.speakerAudioPath,
+          prompt_audio: preset.promptAudioPath,
+          prompt_text: preset.promptText,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      return resp.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async *stream(text: string, voice: string, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
     if (!this.opts.voiceManager) throw new Error('GSV 提供方未配置音色管理器');
     const preset = this.opts.voiceManager.get(voice);
@@ -36,7 +57,12 @@ export class GsvProvider implements TTSProvider {
   }
 
   /** 直接以预设流式合成（朗读/自动朗读/试听的临时预设都走这里）。 */
-  async *streamWithPreset(text: string, voice: VoicePreset, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
+  async *streamWithPreset(
+    text: string,
+    voice: VoicePreset,
+    signal?: AbortSignal,
+    opts?: { timeoutMs?: number },
+  ): AsyncIterable<ProviderChunk> {
     if (!voice.speakerAudioPath) throw new Error(`音色 "${voice.name}" 缺少 speakerAudioPath（参考音频路径）`);
     if (!voice.promptAudioPath) throw new Error(`音色 "${voice.name}" 缺少 promptAudioPath（提示音频路径）`);
     // promptText 留空时交给服务端：引擎支持 ASR 则自动转写，否则返回明确错误
@@ -51,12 +77,13 @@ export class GsvProvider implements TTSProvider {
       stream_chunk: 25,
     };
 
-    // 合并调用方取消信号与超时信号
-    const timeoutSignal = AbortSignal.timeout(cfg.timeout);
+    // 合并调用方取消信号与超时信号（timeoutMs=0 表示由调用方自行控制，不设超时）
+    const timeoutMs = opts?.timeoutMs ?? cfg.timeout;
+    const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null;
     const ac = new AbortController();
     const forward = () => ac.abort(new DOMException('aborted', 'AbortError'));
     signal?.addEventListener('abort', forward, { once: true });
-    timeoutSignal.addEventListener('abort', forward, { once: true });
+    timeoutSignal?.addEventListener('abort', forward, { once: true });
 
     let resp: Response;
     try {
@@ -68,7 +95,7 @@ export class GsvProvider implements TTSProvider {
       });
     } finally {
       signal?.removeEventListener('abort', forward);
-      timeoutSignal.removeEventListener('abort', forward);
+      timeoutSignal?.removeEventListener('abort', forward);
     }
 
     if (!resp.ok) {

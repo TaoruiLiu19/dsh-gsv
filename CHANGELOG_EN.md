@@ -2,6 +2,18 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.1.0] - 2026-11-06
+
+### Faster first audio (local GSV)
+- **Read-aloud now uses a streaming WAV**: playback starts as soon as the engine emits its first chunk, instead of waiting for the whole reply to be segmented and synthesized; a 300-character reply went from ~38 s to ~2–3 s to first audio in our tests (varies by machine and length)
+- **Inference warm-up** after engine start avoids the extra CUDA/lazy-init cost on the first real request
+- **New `/warmup` endpoint**: caches speaker/prompt features and runs a short inference; the plugin pre-warms the default voice once the engine is ready
+- **New `autoStart` setting (default on)**: starts the engine in the background and pre-warms on plugin load, moving the 15–90 s model load off the click path; can be disabled
+- **Segment sizing**: first segment ≤30 chars, later segments ≤150 chars (JSON/NDJSON fallback path) to avoid the 30 s per-segment timeout
+- **Cancellation propagation**: stopping/switching/closing the page aborts the engine request so old work no longer holds the inference lock
+- Engine readiness polling reduced from 3 s to 0.5 s; startup wait raised from 90 s to 120 s
+- Added `src/wav-stream.ts` (unknown-length WAV header, float32→16-bit PCM) with unit tests
+
 ## [5.0.1] - 2026-10-29
 
 ### Voice market submission guide

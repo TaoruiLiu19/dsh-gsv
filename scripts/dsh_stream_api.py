@@ -22,6 +22,7 @@ import json
 import base64
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -78,6 +79,12 @@ class StreamRequest(BaseModel):
     stream_mode: str = "token"
 
 
+class WarmupRequest(BaseModel):
+    speaker_audio: str
+    prompt_audio: str
+    prompt_text: str = ""
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global tts, models_dir_global
@@ -112,6 +119,22 @@ async def lifespan(_: FastAPI):
                 logger.warning(f"预缓存 prompt 失败: {e}")
 
     await asyncio.get_running_loop().run_in_executor(None, _preload)
+
+    # 推理预热：初始化 CUDA kernel / 惰性模块，避免第一次真实请求多等几秒
+    def _warm_infer():
+        if os.path.exists(example_spk) and os.path.exists(example_prompt):
+            try:
+                tts.infer(
+                    spk_audio_path=example_spk,
+                    prompt_audio_path=example_prompt,
+                    prompt_audio_text="ちが……ちがう。レイア、貴様は間違っている。",
+                    text="你好。",
+                )
+                logger.info("推理预热完成")
+            except Exception as e:
+                logger.warning(f"推理预热失败: {e}")
+
+    await asyncio.get_running_loop().run_in_executor(None, _warm_infer)
     logger.info("TTS 模型加载完成（含预热）！")
     try:
         yield
@@ -156,9 +179,52 @@ def _transcribe_prompt(tts_obj, audio_path: str) -> Optional[str]:
     return None
 
 
+_ASR_CACHE: dict[str, str] = {}
+
+
+def _transcribe_prompt_cached(tts_obj, audio_path: str) -> Optional[str]:
+    """ASR 结果按（路径, mtime, size）缓存，避免同一提示音频每次请求都转写。"""
+    try:
+        st = os.stat(audio_path)
+        key = f"{audio_path}:{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        key = audio_path
+    if key in _ASR_CACHE:
+        return _ASR_CACHE[key]
+    text = _transcribe_prompt(tts_obj, audio_path)
+    if text:
+        _ASR_CACHE[key] = text
+    return text
+
+
+@app.post("/warmup")
+async def warmup(request: WarmupRequest):
+    """预热指定音色：缓存 speaker/prompt 特征并跑一次极短推理。"""
+    if tts is None:
+        raise HTTPException(status_code=503, detail="TTS 模型未加载")
+    if not request.prompt_text.strip():
+        return {"ok": False, "message": "prompt_text 为空，跳过预热（避免触发 ASR）"}
+
+    def _run():
+        begin = time.perf_counter()
+        tts.cache_spk_audio(request.speaker_audio)
+        tts.cache_prompt_audio(request.prompt_audio, request.prompt_text)
+        tts.infer(
+            spk_audio_path=request.speaker_audio,
+            prompt_audio_path=request.prompt_audio,
+            prompt_audio_text=request.prompt_text,
+            text="你好。",
+        )
+        return round((time.perf_counter() - begin) * 1000)
+
+    ms = await asyncio.get_running_loop().run_in_executor(None, _run)
+    logger.info(f"音色预热完成（{ms} ms）")
+    return {"ok": True, "ms": ms}
+
+
 @app.get("/")
 async def root():
-    return {"message": "DSH-GSV-TTS Stream API", "endpoints": {"/tts/stream": "POST 真流式 SSE"}}
+    return {"message": "DSH-GSV-TTS Stream API", "endpoints": {"/tts/stream": "POST 真流式 SSE", "/warmup": "POST 音色预热"}}
 
 
 @app.post("/tts/stream")
@@ -170,7 +236,7 @@ async def tts_stream(request: StreamRequest):
         if tts is None:
             raise HTTPException(status_code=503, detail="TTS 模型未加载")
         try:
-            prompt_text = await asyncio.to_thread(_transcribe_prompt, tts, request.prompt_audio)
+            prompt_text = await asyncio.to_thread(_transcribe_prompt_cached, tts, request.prompt_audio)
         except Exception as e:
             logger.warning(f"ASR 调用异常: {e}")
             prompt_text = None
