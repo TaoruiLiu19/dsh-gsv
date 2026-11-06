@@ -367,9 +367,14 @@ export function apply(ctx: any, config: any) {
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-gsv-tts/provider/voices',
-    handler: async (_req: any, res: any) => {
+    handler: async (req: any, res: any) => {
       try {
-        const provider: ProviderKind = readConfig().provider;
+        // 切换模式时客户端会在写回配置前先取目标 provider 的音色，
+        // 因此允许 body/query 显式指定；未指定时用当前配置。
+        const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>;
+        const url = new URL(String(req.url ?? '/'), 'http://localhost');
+        const requested = body.provider ?? url.searchParams.get('provider');
+        const provider: ProviderKind = requested === 'edge' || requested === 'gsv' ? requested : readConfig().provider;
         json(res, 200, { provider, voices: await tts.listVoices(provider) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });

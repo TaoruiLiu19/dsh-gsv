@@ -13,6 +13,7 @@ All notable changes to dsh-gsv-tts are documented in this file. Format based on 
 - **Cancellation propagation**: stopping/switching/closing the page aborts the engine request so old work no longer holds the inference lock
 - Engine readiness polling reduced from 3 s to 0.5 s; startup wait raised from 90 s to 120 s
 - Added `src/wav-stream.ts` (unknown-length WAV header, float32→16-bit PCM) with unit tests
+- Fixed mode switching so the voice list is fetched for the requested provider (switching to Edge could previously prefill local voice names)
 
 ## [5.0.1] - 2026-10-29
 
