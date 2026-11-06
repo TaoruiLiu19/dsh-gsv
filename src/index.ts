@@ -44,7 +44,7 @@ export const Config: any = Schema.object({
   })).default([]).description('音色预设列表，可在设置中自定义')),
   defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个）').default('')),
   autoPlay: live(Schema.boolean().default(false).description('是否自动朗读助手回复')),
-  autoStart: live(Schema.boolean().default(true).description('插件加载时后台启动本地引擎并预热默认音色（gsv 模式）')),
+  engineMode: live(Schema.union([Schema.const('always'), Schema.const('eco')]).default('eco').description('引擎启动方式：always=常驻模式（性能优先，自动启动并预热）/ eco=节能模式（资源优先，不后台启动，与旧版一致）')),
   interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）')),
   timeout: live(Schema.number().min(1).default(30000).description('请求超时时间（毫秒）')),
   installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
@@ -103,7 +103,7 @@ export function apply(ctx: any, config: any) {
     if (autoStartStarted) return;
     autoStartStarted = true;
     const cfg = readConfig();
-    if (cfg.provider !== 'gsv' || !cfg.autoStart) return;
+    if (cfg.provider !== 'gsv' || cfg.engineMode !== 'always') return;
     try {
       const result = await engineCtl().start();
       if (result.ok) void prewarmDefaultVoice();

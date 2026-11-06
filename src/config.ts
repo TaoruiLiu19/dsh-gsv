@@ -48,6 +48,16 @@ export function storedProvider(raw: unknown): unknown {
   return readConfigValue<unknown>(raw, undefined);
 }
 
+/**
+ * 引擎启动方式：新配置 engineMode 优先；
+ * 兼容 5.1.0 开发期的 autoStart（true=常驻，false/缺省=节能）。
+ */
+export function resolveEngineMode(source: Record<string, unknown>): 'always' | 'eco' {
+  const mode = readConfigValue<unknown>(source.engineMode, undefined);
+  if (mode === 'always' || mode === 'eco') return mode;
+  return readConfigValue<unknown>(source.autoStart, false) === true ? 'always' : 'eco';
+}
+
 /** 把 `apply(ctx, config)` 收到的配置（含 volatile 引用）归一为当前生效的普通对象。 */
 export function snapshotConfig(raw: unknown): Config {
   const source = (raw ?? {}) as Record<string, unknown>;
@@ -59,7 +69,7 @@ export function snapshotConfig(raw: unknown): Config {
     voices: list,
     defaultVoice: readConfigValue(source.defaultVoice, ''),
     autoPlay: readConfigValue(source.autoPlay, false),
-    autoStart: readConfigValue(source.autoStart, true),
+    engineMode: resolveEngineMode(source),
     interruptOnNew: readConfigValue(source.interruptOnNew, true),
     // AbortSignal.timeout / 工具 timeoutMs 都要求正数：非法值回退默认，避免旧配置把插件弄挂
     timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : 30000,

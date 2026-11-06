@@ -20,12 +20,12 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 - 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and < 1 s to first audio
 - 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **streamed** (first chunk starts playback; no need to wait for the whole reply), with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
-- ⚡ **Faster first audio**: local mode auto-starts the engine in the background and pre-warms the default voice; read-aloud uses a **streaming WAV**, cutting first audio on long replies from ~38 s to ~2–3 s in our tests (depends on hardware and reply length)
+- ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, cutting first audio on long replies from ~38 s to ~2–3 s in our tests. The default **Eco mode (resources first)** does not run in the background, same as before
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
 - 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation; [submit your favorite voices](docs/VOICE_MARKET.md)
-- 🚀 **One-click engine start/stop & setup**: starts and pre-warms in the background by default (`autoStart` can be disabled); manual control and auto-install remain available, model loading ~15–90 s
+- 🚀 **One-click engine start/stop & setup**: choose **Always-on (performance)** or **Eco (resources first, default)**; manual control and auto-install remain available, model loading ~15–90 s
 - 🔗 **Same-origin audio short links**: synthesized audio is saved and served same-origin — no more giant data URLs in the model context
 
 ---
@@ -55,7 +55,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 1. Install the plugin and restart DSH (see "📦 Installation")
 2. Open Settings → Voice Settings → **TTS Mode** → select **Local Pro (GSV)**
 3. **Install the engine**: have the agent call `tts_setup_engine`, or see "🔧 Installing the GSV-TTS-Lite Engine"
-4. **Start the engine**: it auto-starts and pre-warms in the background by default; you can also toggle it manually (disable `autoStart` to require a manual start)
+4. **Choose engine startup**: the default **Eco mode (resources first)** does not start in the background; turn the engine on manually (15–90 s) or switch to **Always-on (performance)** to auto-start and pre-warm (first read ~2–3 s)
 5. **Add a voice**: add one under "Voice presets", or one-click download from the "🎪 Voice Market", or clone one
 6. Click the 🔊 next to any assistant message, or have the agent call `tts_speak`
 
@@ -205,7 +205,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 |-------|-------------|---------|
 | TTS Mode | Quick (Edge cloud, zero setup) / Local Pro (GSV, offline & cloning) | existing users `gsv` / fresh installs `edge` |
 | Engine switch | Start/stop the GSV-TTS-Lite engine process | Off |
-| `autoStart` | Start the engine and pre-warm the default voice in the background on plugin load (gsv mode) | `true` |
+| `engineMode` | Engine startup: `always` = Always-on (performance, auto-start + pre-warm) / `eco` = Eco (resources first, no background start, same as before) | `eco` |
 | `apiUrl` | Engine API URL | `http://localhost:9880` |
 | `defaultVoice` | Default voice (gsv=preset name / edge=cloud voice id; empty = first) | empty |
 | `timeout` | Request timeout (ms) | `30000` |
@@ -217,6 +217,15 @@ Download and inject voices from the Voice Market in one click — no need to fil
 | `schemaVersion` | Config schema version (migration guard marker) | `1` |
 | `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
 | `voices` | Voice preset list | empty |
+
+### Choosing an engine startup mode
+
+| Mode | First read | Idle cost | Best for |
+|---|---|---|---|
+| **Eco (resources first, default)** | Start the engine manually first (15–90 s load) | No VRAM/RAM held | Occasional reading, gaming, battery; same as before |
+| **Always-on (performance)** | ~2–3 s | ~0.9 GB VRAM + 0.5 GB RAM | Frequent reading, desktop/plugged in |
+
+> Always-on starts and pre-warms the engine when the plugin loads. Eco never auto-starts; turn the engine on in Voice Settings (or start it after `tts_setup_engine`).
 
 Config is stored in the active profile's config layer (the `dsh-gsv-tts:` entry of `~/.dsh/profiles/<profile>/cordis.patch.yml`). Since DSH 0.2 these fields are **volatile config**: a settings save updates the config references in place, so the plugin reads the new values without a reload.
 
