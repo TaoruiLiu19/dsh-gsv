@@ -41,8 +41,12 @@ export class AudioStore {
     this.purgeAll();
   }
 
-  private origin(): string | undefined {
-    if (typeof this.originProvider === 'function') {
+  /** 已落盘音频所在目录（同进程内拼接整段音频时读取分段文件用）。 */
+  get directory(): string {
+    return this.dir;
+  }
+
+  private origin(): string | undefined {    if (typeof this.originProvider === 'function') {
       try {
         return this.originProvider();
       } catch {
@@ -94,11 +98,44 @@ export class AudioStore {
         return;
       }
       const stat = statSync(file);
-      res.writeHead(200, {
+      const size = stat.size;
+      const head = {
         'Content-Type': mimeFor(name),
-        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-cache',
-      });
+      };
+      // 支持 Range：否则 <audio> 拖动进度时无法越过已缓冲区间，会退回从头播放
+      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers?.range ?? '').trim());
+      if (range !== null && (range[1] !== '' || range[2] !== '')) {
+        let start: number;
+        let end: number;
+        if (range[1] === '') {
+          const suffix = Math.max(1, Number(range[2]) || 1);
+          start = Math.max(0, size - suffix);
+          end = size - 1;
+        } else {
+          start = Number(range[1]);
+          end = range[2] === '' ? size - 1 : Math.min(Number(range[2]), size - 1);
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+          res.writeHead(416, { ...head, 'Content-Range': `bytes */${size}` });
+          res.end();
+          return;
+        }
+        res.writeHead(206, {
+          ...head,
+          'Content-Range': `bytes ${start}-${end}/${size}`,
+          'Content-Length': end - start + 1,
+        });
+        await new Promise<void>((resolve, reject) => {
+          const stream = createReadStream(file, { start, end });
+          stream.on('error', reject);
+          stream.on('close', resolve);
+          stream.pipe(res);
+        });
+        return;
+      }
+      res.writeHead(200, { ...head, 'Content-Length': size });
       await new Promise<void>((resolve, reject) => {
         const stream = createReadStream(file);
         stream.on('error', reject);

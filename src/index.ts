@@ -2,6 +2,8 @@ import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { TTSService } from './tts.service.js';
 import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
@@ -673,6 +675,85 @@ export function apply(ctx: any, config: any) {
       } catch (e: any) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+      }
+    },
+  }));
+
+  // 整段朗读：把一条回复（或选中的一段文字）合成成单个音频文件，
+  // 便于前端做进度拖动与下载（分段队列无法跨段 seek）。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/speak/full',
+    handler: async (req: any, res: any) => {
+      try {
+        const body = await readJson(req);
+        let text = typeof body.text === 'string' ? body.text : '';
+        if (text.trim() === '') {
+          const { sessionId, messageId } = body as { sessionId?: string; messageId?: string };
+          if (!sessionId || !messageId) {
+            json(res, 400, { message: '缺少 text 或 sessionId/messageId' });
+            return;
+          }
+          const sessions = (ctx.get as any)('sessions');
+          const session = sessions?.get(sessionId);
+          if (!session) {
+            json(res, 404, { message: '会话不存在' });
+            return;
+          }
+          const events: any[] = typeof session.snapshotEvents === 'function'
+            ? session.snapshotEvents()
+            : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
+          let content: any[] = [];
+          for (const ev of events) {
+            if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
+              content = ev.data?.message?.content ?? [];
+            }
+          }
+          if (!Array.isArray(content) || content.length === 0) {
+            json(res, 404, { message: '未找到消息' });
+            return;
+          }
+          text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text ?? '').join('');
+        }
+        text = TextCleaner.clean(text);
+        if (!text) {
+          json(res, 400, { message: '没有可朗读的文本（可能只包含代码/链接/表格等）' });
+          return;
+        }
+        if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
+          json(res, 400, { message: `文本过长（${text.length} 字符），请分段朗读` });
+          return;
+        }
+        const voice = resolveVoice();
+        if (voice === null) {
+          json(res, 400, { message: '未配置音色' });
+          return;
+        }
+        const cfg = readConfig();
+        if (cfg.provider !== 'edge' || typeof voice !== 'string') {
+          const r = await tts.synthesize(text, voice);
+          json(res, 200, { audioUrl: r.audioUrl, duration: 0, parts: 1 });
+          return;
+        }
+        // Edge：按句分段合成后拼成单个 MP3（同格式帧直接拼接），得到可 seek 的整段音频
+        const parts = tts.planSegments(text);
+        const chunks: Buffer[] = [];
+        for (const part of parts) {
+          const r = await tts.synthesize(part, voice);
+          const fileName = String(r.audioUrl).split('/').pop() as string;
+          chunks.push(readFileSync(join(audioStore.directory, fileName)));
+        }
+        const merged = Buffer.concat(chunks);
+        const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.mp3`;
+        const saved = audioStore.saveRaw(name, merged);
+        json(res, 200, {
+          audioUrl: saved.url,
+          duration: merged.length * 8 / 48000,
+          bytes: merged.length,
+          parts: parts.length,
+        });
+      } catch (e: any) {
+        json(res, 500, { message: String(e?.message ?? e) });
       }
     },
   }));
