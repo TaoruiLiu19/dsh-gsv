@@ -2,6 +2,15 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### 整段播放 / 下载 + 选中朗读
+- 新增「整段」按钮：按当前回复/选中文字生成完整 WAV，可拖动进度、下载；默认流式朗读不变，首音不受影响
+- 新增选中文字朗读：选中对话正文后浮出「朗读选中」，走流式 `/speak`（支持 `text` 入参）
+- `AudioStore` 支持 HTTP Range / HEAD，完整音频可 seek
+- 本地整段音频用流式 PCM 直接写 WAV，不设 30 秒超时；长回复不会再被截断
+- 整段生成支持取消（停止/关闭页面即中断）
+
 ## [5.1.0] - 2026-11-06
 
 ### 首音性能优化（GSV 本地）

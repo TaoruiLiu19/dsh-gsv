@@ -2,6 +2,15 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Full audio / download + read selection
+- New "Full" player action: generates a complete WAV for the current reply or selected text, with seek and download; normal read-aloud still streams, so first audio is unchanged
+- Read selected text from the chat with a floating "Read selection" button; it uses streaming `/speak` (`text` input)
+- `AudioStore` supports HTTP Range / HEAD for seekable complete audio
+- Local full audio is streamed straight into a WAV file with no 30 s timeout, so long replies are no longer cut off
+- Full-audio generation can be cancelled by stop / closing the page
+
 ## [5.1.0] - 2026-11-06
 
 ### Faster first audio (local GSV)

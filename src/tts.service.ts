@@ -1,5 +1,9 @@
+import { closeSync, openSync, unlinkSync, writeSync } from 'fs';
+import { randomUUID } from 'crypto';
+import { join } from 'path';
 import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS } from './text-cleaner.js';
 import { splitIntoSegments } from './segmenter.js';
+import { float32ToInt16, wavHeader } from './wav-stream.js';
 import { GsvProvider } from './providers/gsv.js';
 import { EdgeProvider } from './providers/edge.js';
 import type { AudioChunk, AudioStore } from './audio-store.js';
@@ -148,6 +152,53 @@ export class TTSService {
         yield { sampleRate: chunk.sampleRate, data: Buffer.from(chunk.data) };
       }
     }
+  }
+
+  /**
+   * 整段 WAV：把流式 PCM 直接写成一个完整 WAV 文件（不设超时、不占内存）。
+   * 只用于"整段播放 / 下载"这类需要 seek 的可选路径；默认朗读仍走流式 HTTP。
+   */
+  async synthesizeFullWav(
+    text: string,
+    voice: VoicePreset,
+    signal?: AbortSignal,
+  ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
+    const cleanText = TextCleaner.clean(text);
+    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
+    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
+      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
+    }
+    const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.wav`;
+    const file = join(this.audioStore.directory, name);
+    let sampleRate = 32000;
+    let pcmBytes = 0;
+    const fd = openSync(file, 'w');
+    try {
+      writeSync(fd, wavHeader(sampleRate));
+      for await (const chunk of this.streamPcm(cleanText, voice, signal)) {
+        sampleRate = chunk.sampleRate || sampleRate;
+        const pcm = float32ToInt16(chunk.data);
+        if (pcm.length === 0) continue;
+        writeSync(fd, pcm);
+        pcmBytes += pcm.length;
+      }
+      if (pcmBytes === 0) throw new Error('未收到任何音频数据');
+      const header = wavHeader(sampleRate);
+      header.writeUInt32LE(36 + pcmBytes, 4);
+      header.writeUInt32LE(pcmBytes, 40);
+      writeSync(fd, header, 0, header.length, 0);
+    } catch (e) {
+      try { closeSync(fd); } catch { /* 忽略 */ }
+      try { unlinkSync(file); } catch { /* 忽略 */ }
+      throw e;
+    }
+    closeSync(fd);
+    return {
+      audioUrl: this.audioStore.urlFor(name),
+      duration: pcmBytes / (sampleRate * 2),
+      bytes: pcmBytes + 44,
+      parts: 1,
+    };
   }
 
   private async synthesizeGsv(cleanText: string, preset: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {

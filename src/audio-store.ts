@@ -69,12 +69,17 @@ export class AudioStore {
     const file = join(this.dir, name);
     writeFileSync(file, data);
     this.enforceCap();
+    return { url: this.urlFor(name), name };
+  }
+
+  get directory(): string {
+    return this.dir;
+  }
+
+  /** 已落盘文件的同源 URL（用于流式写入完成后直接投递）。 */
+  urlFor(name: string): string {
     const origin = this.origin();
-    // 有同源地址时回绝对 URL（工具结果在聊天里也能直接点开）；否则用同源相对路径。
-    const url = origin
-      ? `${origin}/dsh-gsv-tts/audio/${name}`
-      : `/dsh-gsv-tts/audio/${name}`;
-    return { url, name };
+    return origin ? `${origin}/dsh-gsv-tts/audio/${name}` : `/dsh-gsv-tts/audio/${name}`;
   }
 
   /** 服务 `/dsh-gsv-tts/audio/<file>` 请求。 */
@@ -94,11 +99,52 @@ export class AudioStore {
         return;
       }
       const stat = statSync(file);
-      res.writeHead(200, {
+      const size = stat.size;
+      const head: Record<string, string | number> = {
         'Content-Type': mimeFor(name),
-        'Content-Length': stat.size,
+        'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-cache',
-      });
+      };
+      // Range 让 <audio> 能拖到未缓冲区间；不支持时浏览器会退回从头播放。
+      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers?.range ?? '').trim());
+      if (range !== null && (range[1] !== '' || range[2] !== '')) {
+        let start: number;
+        let end: number;
+        if (range[1] === '') {
+          const suffix = Math.max(1, Number(range[2]) || 1);
+          start = Math.max(0, size - suffix);
+          end = size - 1;
+        } else {
+          start = Number(range[1]);
+          end = range[2] === '' ? size - 1 : Math.min(Number(range[2]), size - 1);
+        }
+        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+          res.writeHead(416, { ...head, 'Content-Range': `bytes */${size}` });
+          res.end();
+          return;
+        }
+        res.writeHead(206, {
+          ...head,
+          'Content-Range': `bytes ${start}-${end}/${size}`,
+          'Content-Length': end - start + 1,
+        });
+        if (req.method === 'HEAD') {
+          res.end();
+          return;
+        }
+        await new Promise<void>((resolve, reject) => {
+          const stream = createReadStream(file, { start, end });
+          stream.on('error', reject);
+          stream.on('close', resolve);
+          stream.pipe(res);
+        });
+        return;
+      }
+      res.writeHead(200, { ...head, 'Content-Length': size });
+      if (req.method === 'HEAD') {
+        res.end();
+        return;
+      }
       await new Promise<void>((resolve, reject) => {
         const stream = createReadStream(file);
         stream.on('error', reject);
