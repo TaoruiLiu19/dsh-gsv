@@ -4,6 +4,10 @@ All notable changes to dsh-gsv-tts are documented in this file. Format based on 
 
 ## [Unreleased]
 
+### Edge online endpoint
+- Edge synthesis now uses `api.msedgeservices.com` via `node-edge-tts`, fixing the old `speech.platform.bing.com` 403 / hanging handshake
+- Edge voice list still comes from `edge-tts-universal`; health check is available again
+
 ### Full audio / download + read selection
 - New "Full" player action: generates a complete WAV for the current reply or selected text, with seek and download; normal read-aloud still streams, so first audio is unchanged
 - Read selected text from the chat with a floating "Read selection" button; it uses streaming `/speak` (`text` input)

@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+### Edge 在线端点
+- Edge 合成迁移到 `api.msedgeservices.com`（改用 `node-edge-tts`），修复旧 `speech.platform.bing.com` 端点 403 / 握手一直挂起的问题
+- Edge 音色列表仍由 `edge-tts-universal` 提供；健康检查恢复可用
+
 ### 整段播放 / 下载 + 选中朗读
 - 新增「整段」按钮：按当前回复/选中文字生成完整 WAV，可拖动进度、下载；默认流式朗读不变，首音不受影响
 - 新增选中文字朗读：选中对话正文后浮出「朗读选中」，走流式 `/speak`（支持 `text` 入参）
