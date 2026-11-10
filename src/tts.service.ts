@@ -217,13 +217,40 @@ export class TTSService {
 
   private async synthesizeEdge(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
     const id = voiceId || this.getConfig().defaultVoice || EDGE_FALLBACK_VOICE;
-    const parts: Buffer[] = [];
-    for await (const chunk of this.edge.stream(cleanText, id, signal)) {
-      if (chunk.mime === 'audio/mpeg' && chunk.data.length > 0) {
-        parts.push(Buffer.from(chunk.data));
+    const attempt = async (voice: string): Promise<Buffer[]> => {
+      const parts: Buffer[] = [];
+      for await (const chunk of this.edge.stream(cleanText, voice, signal)) {
+        if (chunk.mime === 'audio/mpeg' && chunk.data.length > 0) {
+          parts.push(Buffer.from(chunk.data));
+        }
+      }
+      return parts;
+    };
+    let parts: Buffer[] = [];
+    let lastError: unknown;
+    // Edge 偶发 429 / 空流：短退避重试两次，再换晓晓兜底。
+    for (let i = 0; i < 3; i++) {
+      try {
+        parts = await attempt(id);
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        lastError = e;
+      }
+      if (parts.length > 0) break;
+      if (i < 2) await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+    }
+    if (parts.length === 0 && id !== EDGE_FALLBACK_VOICE) {
+      try {
+        parts = await attempt(EDGE_FALLBACK_VOICE);
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        lastError = e;
       }
     }
-    if (parts.length === 0) throw new Error('Edge 未返回音频数据（云端通道可能不可用）');
+    if (parts.length === 0) {
+      const suffix = lastError ? `：${String((lastError as Error)?.message ?? lastError)}` : '';
+      throw new Error(`Edge 未返回音频数据（云端通道可能不可用${suffix}）`);
+    }
     const saved = this.audioStore.saveRaw(`tts_${Date.now()}_${(fileCounter++).toString(36)}.mp3`, Buffer.concat(parts));
     return { audioUrl: saved.url, audioLen: 0, filename: saved.name };
   }
