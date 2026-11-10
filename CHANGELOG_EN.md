@@ -10,6 +10,7 @@ All notable changes to dsh-gsv-tts are documented in this file. Format based on 
 - `AudioStore` supports HTTP Range / HEAD for seekable complete audio
 - Local full audio is streamed straight into a WAV file with no 30 s timeout, so long replies are no longer cut off
 - Full-audio generation can be cancelled by stop / closing the page
+- Edge full audio now returns a usable `duration` (24 kHz / 48 kbps CBR from bytes) and passes AbortSignal into the in-flight segment
 
 ## [5.1.0] - 2026-11-06
 

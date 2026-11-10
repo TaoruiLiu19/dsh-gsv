@@ -10,6 +10,7 @@
 - `AudioStore` 支持 HTTP Range / HEAD，完整音频可 seek
 - 本地整段音频用流式 PCM 直接写 WAV，不设 30 秒超时；长回复不会再被截断
 - 整段生成支持取消（停止/关闭页面即中断）
+- Edge 整段返回可用的 `duration`（24 kHz / 48 kbps CBR 按字节换算），并把 AbortSignal 传入在途分段
 
 ## [5.1.0] - 2026-11-06
 

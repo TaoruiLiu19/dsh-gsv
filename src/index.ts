@@ -759,16 +759,18 @@ export function apply(ctx: any, config: any) {
           }
           return;
         }
-        // 云端：按句合成后把 MP3 串成一个文件；时长交给浏览器 audio.duration 读取。
+        // 云端：按句合成后把 MP3 串成一个文件。
+        // Edge 输出固定 24 kHz / 48 kbps CBR，拼接文件无 Xing 头时直接按字节换算时长。
+        const ac = new AbortController();
         let aborted = false;
-        const onClose = () => { aborted = true; };
+        const onClose = () => { aborted = true; ac.abort(); };
         res.on('close', onClose);
         try {
           const parts = tts.planSegments(text);
           const chunks: Buffer[] = [];
           for (const part of parts) {
             if (aborted) throw new Error('已取消');
-            const r = await tts.synthesize(part, voice);
+            const r = await tts.synthesize(part, voice, ac.signal);
             const fileName = String(r.audioUrl).split('/').pop() as string;
             chunks.push(readFileSync(join(audioStore.directory, fileName)));
           }
@@ -776,7 +778,7 @@ export function apply(ctx: any, config: any) {
           const saved = audioStore.saveRaw(`reply_${Date.now()}_${randomUUID().slice(0, 8)}.mp3`, merged);
           json(res, 200, {
             audioUrl: saved.url,
-            duration: 0,
+            duration: merged.length * 8 / 48000,
             bytes: merged.length,
             parts: parts.length,
             voiceUsed: voice,
