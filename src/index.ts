@@ -14,6 +14,7 @@ import { VoiceRegistryManager } from './voice-registry.js';
 import { resolveProvider } from './migration.js';
 import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
 import { wavHeader, float32ToInt16 } from './wav-stream.js';
+import { EDGE_FALLBACK_VOICE, isEdgeVoiceId } from './providers/edge.js';
 import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
@@ -114,6 +115,25 @@ export function apply(ctx: any, config: any) {
     }
   };
   setTimeout(() => { void autoStartEngine(); }, 1500);
+
+  // 兼容旧配置：provider=edge 但 defaultVoice 仍是本地音色名时，云端口播会以 1007 失败。
+  // 自动把默认音色修成 Edge 的晓晓（只改 edge 模式，gsv 配置不动）。
+  ctx.effect(() => {
+    let disposed = false;
+    const run = async () => {
+      try { await ctx.root?.loader?.await?.(); } catch { /* 精简宿主 */ }
+      if (disposed) return;
+      const cfg = readConfig();
+      if (cfg.provider !== 'edge' || !cfg.defaultVoice || isEdgeVoiceId(cfg.defaultVoice)) return;
+      try {
+        await ctx.settings.update(entryId, { defaultVoice: EDGE_FALLBACK_VOICE });
+      } catch {
+        // 只读部署或设置服务未就绪：运行时仍由 EdgeProvider 回退
+      }
+    };
+    void run();
+    return () => { disposed = true; };
+  }, 'gsv-tts: repair-edge-voice');
 
   // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
   // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。

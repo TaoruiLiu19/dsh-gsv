@@ -15,6 +15,13 @@ interface EdgeCommunicateCtor {
   new (text: string, options?: { voice?: string }): EdgeCommunicateLike;
 }
 
+/** Edge 合法音色 id 形如 zh-CN-XiaoxiaoNeural / zh-CN-liaoning-XiaobeiNeural。 */
+export function isEdgeVoiceId(value: string): boolean {
+  return /^[a-z]{2,3}-[A-Za-z0-9-]+Neural$/.test(value);
+}
+
+export const EDGE_FALLBACK_VOICE = 'zh-CN-XiaoxiaoNeural';
+
 /** 注入的库依赖（单测用假实现替换）。 */
 export interface EdgeLib {
   Communicate: EdgeCommunicateCtor;
@@ -145,7 +152,10 @@ export class EdgeProvider implements TTSProvider {
   }
 
   async *stream(text: string, voice: string, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
-    const c = new this.lib.Communicate(text, { voice });
+    // 兼容旧配置：provider=edge 但 defaultVoice 还是本地音色名（如「拉菲」）。
+    // 非法 id 会让 Edge 以 1007 关闭，这里回退到默认可用的晓晓。
+    const voiceId = isEdgeVoiceId(voice) ? voice : EDGE_FALLBACK_VOICE;
+    const c = new this.lib.Communicate(text, { voice: voiceId });
     const it = c.stream();
     try {
       while (true) {

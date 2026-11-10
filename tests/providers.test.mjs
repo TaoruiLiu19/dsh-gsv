@@ -32,6 +32,21 @@ test('EdgeProvider.stream：MP3 块透传 + MIME audio/mpeg，WordBoundary 忽�
   assert.equal(Buffer.from(chunks[0].data).toString(), 'MP3DATA');
 });
 
+test('EdgeProvider.stream：provider=edge 但默认音色是本地预设名时回退到晓晓', async () => {
+  let usedVoice = '';
+  const Capturing = class {
+    constructor(_text, options) { usedVoice = options.voice; }
+    stream() {
+      return (async function* () {
+        yield { type: 'audio', data: Buffer.from('MP3') };
+      })();
+    }
+  };
+  const ep = new EdgeProvider({ Communicate: Capturing, listVoices: async () => [] });
+  for await (const _ of ep.stream('你好', '拉菲')) { /* consume */ }
+  assert.equal(usedVoice, 'zh-CN-XiaoxiaoNeural');
+});
+
 test('EdgeProvider.listVoices：精选序优先 + zh-CN/en 兜底，日/韩等小众被过滤；中文音色显示官方中文名', async () => {
   const ep = new EdgeProvider({ Communicate: okCommunicate(), listVoices: async () => FAKE_VOICES });
   const voices = await ep.listVoices();
