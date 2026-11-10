@@ -1,10 +1,45 @@
-import { Communicate, listVoices as libListVoices } from 'edge-tts-universal';
+import { listVoices as libListVoices } from 'edge-tts-universal';
+import { EdgeTTS } from 'node-edge-tts';
 import type { ProviderChunk, ProviderHealth, TTSProvider, VoiceInfo } from '../types.js';
+
+interface EdgeStreamMessage {
+  type?: string;
+  data?: Buffer;
+}
+
+interface EdgeCommunicateLike {
+  stream(): AsyncGenerator<EdgeStreamMessage, void, unknown>;
+}
+
+interface EdgeCommunicateCtor {
+  new (text: string, options?: { voice?: string }): EdgeCommunicateLike;
+}
 
 /** 注入的库依赖（单测用假实现替换）。 */
 export interface EdgeLib {
-  Communicate: typeof Communicate;
+  Communicate: EdgeCommunicateCtor;
   listVoices: typeof libListVoices;
+}
+
+/**
+ * 微软在 2026-10 把 Edge Read Aloud 合成迁到 api.msedgeservices.com；
+ * edge-tts-universal@1.4.0 仍指向旧地址并会在握手 403 时挂起。
+ * 合成改走 node-edge-tts（新端点 + 握手失败会 reject），音色列表仍用原库。
+ */
+class NodeEdgeCommunicate implements EdgeCommunicateLike {
+  constructor(private text: string, private options?: { voice?: string }) {}
+
+  async *stream(): AsyncGenerator<EdgeStreamMessage, void, unknown> {
+    const tts = new EdgeTTS({
+      voice: this.options?.voice ?? 'zh-CN-XiaoxiaoNeural',
+      timeout: 30000,
+    });
+    for await (const chunk of tts.streamAudio(this.text)) {
+      if (Buffer.isBuffer(chunk) && chunk.length > 0) {
+        yield { type: 'audio', data: chunk };
+      }
+    }
+  }
 }
 
 /** 精选音色（优先序）：中文全系 + 主流英文。按此序过滤 listVoices，稳定且 20+。 */
@@ -80,7 +115,7 @@ export class EdgeProvider implements TTSProvider {
 
   constructor(lib?: Partial<EdgeLib>, private clock: () => number = () => Date.now()) {
     this.lib = {
-      Communicate: lib?.Communicate ?? Communicate,
+      Communicate: lib?.Communicate ?? NodeEdgeCommunicate,
       listVoices: lib?.listVoices ?? libListVoices,
     };
   }
@@ -122,7 +157,7 @@ export class EdgeProvider implements TTSProvider {
         }
       }
     } finally {
-      try { await it.return?.(); } catch { /* 忽略 */ }
+      try { await it.return?.(undefined); } catch { /* 忽略 */ }
     }
   }
 
