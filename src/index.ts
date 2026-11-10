@@ -2,6 +2,8 @@ import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { TTSService } from './tts.service.js';
 import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
@@ -594,46 +596,51 @@ export function apply(ctx: any, config: any) {
       try {
         let raw = '';
         for await (const chunk of req) raw += chunk;
-        const { sessionId, messageId } = JSON.parse(raw || '{}');
-        if (!sessionId || !messageId) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '缺少 sessionId/messageId' }));
-          return;
-        }
-        const sessions = ctx.get('sessions');
-        const session = sessions?.get(sessionId);
-        if (!session) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '会话不存在' }));
-          return;
-        }
-        // DSH 0.2+：同步读取整段事件日志请用 snapshotEvents()（events/log 已不再保证存在）。
-        const events: Array<{ type?: string; data?: { message?: { id?: string; content?: Array<{ type?: string; text?: string }> } } }> =
-          typeof session.snapshotEvents === 'function'
-            ? session.snapshotEvents()
-            : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
-        let content: Array<{ type?: string; text?: string }> = [];
-        for (const ev of events) {
-          if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
-            content = ev.data?.message?.content ?? [];
-            break;
+        const body = JSON.parse(raw || '{}');
+        const { sessionId, messageId } = body;
+        // 支持直接传 text（选中文字朗读），否则按 sessionId+messageId 取助手消息
+        let text = typeof body.text === 'string' ? TextCleaner.clean(body.text) : '';
+        if (!text) {
+          if (!sessionId || !messageId) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: '缺少 sessionId/messageId 或 text' }));
+            return;
           }
+          const sessions = ctx.get('sessions');
+          const session = sessions?.get(sessionId);
+          if (!session) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: '会话不存在' }));
+            return;
+          }
+          // DSH 0.2+：同步读取整段事件日志请用 snapshotEvents()（events/log 已不再保证存在）。
+          const events: Array<{ type?: string; data?: { message?: { id?: string; content?: Array<{ type?: string; text?: string }> } } }> =
+            typeof session.snapshotEvents === 'function'
+              ? session.snapshotEvents()
+              : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
+          let content: Array<{ type?: string; text?: string }> = [];
+          for (const ev of events) {
+            if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
+              content = ev.data?.message?.content ?? [];
+              break;
+            }
+          }
+          if (content.length === 0) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: '未找到消息' }));
+            return;
+          }
+          // 只取文本块（type === 'text'），排除思考/工具调用等；空文本判断用清洗后文本，
+          // 与合成口径一致——只有代码块/链接/表格的回复应给友好提示，而不是 404
+          const rawText = content
+            .filter((b) => b.type === 'text')
+            .map((b) => b.text ?? '')
+            .join('');
+          text = TextCleaner.clean(rawText);
         }
-        if (content.length === 0) {
-          res.writeHead(404, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '未找到消息' }));
-          return;
-        }
-        // 只取文本块（type === 'text'），排除思考/工具调用等；空文本判断用清洗后文本，
-        // 与合成口径一致——只有代码块/链接/表格的回复应给友好提示，而不是 404
-        const rawText = content
-          .filter((b) => b.type === 'text')
-          .map((b) => b.text ?? '')
-          .join('');
-        const text = TextCleaner.clean(rawText);
         if (!text) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '该消息没有可朗读的文本（可能只包含代码/链接/表格等）' }));
+          res.end(JSON.stringify({ message: '没有可朗读的文本（可能只包含代码/链接/表格等）' }));
           return;
         }
         if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
@@ -673,6 +680,114 @@ export function apply(ctx: any, config: any) {
       } catch (e: any) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ message: String(e?.message ?? e) }));
+      }
+    },
+  }));
+
+  // 整段朗读（可选）：返回单个可 seek / 可下载的音频文件。
+  // 默认朗读仍走 /speak 的流式 WAV，不牺牲首音；这里只服务于「整段播放/下载」。
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/speak/full',
+    handler: async (req: any, res: any) => {
+      try {
+        const body = await readJson(req);
+        let text = typeof body.text === 'string' ? body.text : '';
+        if (!text.trim()) {
+          const { sessionId, messageId } = body as { sessionId?: string; messageId?: string };
+          if (!sessionId || !messageId) {
+            json(res, 400, { message: '缺少 text 或 sessionId/messageId' });
+            return;
+          }
+          const sessions = ctx.get('sessions');
+          const session = sessions?.get(sessionId);
+          if (!session) {
+            json(res, 404, { message: '会话不存在' });
+            return;
+          }
+          const events: any[] = typeof session.snapshotEvents === 'function'
+            ? session.snapshotEvents()
+            : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
+          let content: any[] = [];
+          for (const ev of events) {
+            if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
+              content = ev.data?.message?.content ?? [];
+              break;
+            }
+          }
+          if (!Array.isArray(content) || content.length === 0) {
+            json(res, 404, { message: '未找到消息' });
+            return;
+          }
+          text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text ?? '').join('');
+        }
+        text = TextCleaner.clean(text);
+        if (!text) {
+          json(res, 400, { message: '没有可朗读的文本（可能只包含代码/链接/表格等）' });
+          return;
+        }
+        if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
+          json(res, 400, { message: `文本过长（${text.length} 字符），请分段朗读` });
+          return;
+        }
+        const voice = resolveVoice();
+        if (voice === null) {
+          json(res, 400, { message: '未配置音色' });
+          return;
+        }
+        const cfg = readConfig();
+        if (cfg.provider !== 'edge') {
+          if (typeof voice === 'string') {
+            json(res, 400, { message: '本地模式需要音色预设' });
+            return;
+          }
+          // 本地：把引擎 PCM 直接写成完整 WAV，不设超时，长回复也不会被 30 秒截断。
+          const ac = new AbortController();
+          const onClose = () => ac.abort();
+          res.on('close', onClose);
+          try {
+            const r = await tts.synthesizeFullWav(text, voice, ac.signal);
+            json(res, 200, {
+              audioUrl: r.audioUrl,
+              duration: r.duration,
+              bytes: r.bytes,
+              parts: r.parts,
+              voiceUsed: voice.name,
+            });
+          } finally {
+            res.off('close', onClose);
+          }
+          return;
+        }
+        // 云端：按句合成后把 MP3 串成一个文件。
+        // Edge 输出固定 24 kHz / 48 kbps CBR，拼接文件无 Xing 头时直接按字节换算时长。
+        const ac = new AbortController();
+        let aborted = false;
+        const onClose = () => { aborted = true; ac.abort(); };
+        res.on('close', onClose);
+        try {
+          const parts = tts.planSegments(text);
+          const chunks: Buffer[] = [];
+          for (const part of parts) {
+            if (aborted) throw new Error('已取消');
+            const r = await tts.synthesize(part, voice, ac.signal);
+            const fileName = String(r.audioUrl).split('/').pop() as string;
+            chunks.push(readFileSync(join(audioStore.directory, fileName)));
+          }
+          const merged = Buffer.concat(chunks);
+          const saved = audioStore.saveRaw(`reply_${Date.now()}_${randomUUID().slice(0, 8)}.mp3`, merged);
+          json(res, 200, {
+            audioUrl: saved.url,
+            duration: merged.length * 8 / 48000,
+            bytes: merged.length,
+            parts: parts.length,
+            voiceUsed: voice,
+          });
+        } finally {
+          res.off('close', onClose);
+        }
+      } catch (e: any) {
+        json(res, 500, { message: String(e?.message ?? e) });
       }
     },
   }));

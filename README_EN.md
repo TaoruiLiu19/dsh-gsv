@@ -21,6 +21,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 - 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **streamed** (first chunk starts playback; no need to wait for the whole reply), with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
 - ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, so first audio on long replies is much faster. The default **Eco mode (resources first)** does not run in the background, same as before
+- ⏩ **Full audio / download + read selection**: the floating player offers a "Full" action that produces a seekable, downloadable complete audio file; selected chat text can be read on its own. Normal read-aloud still streams, so first audio is unchanged
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
