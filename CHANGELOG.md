@@ -2,7 +2,7 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [Unreleased]
+## [5.2.0] - 2026-11-10
 
 ### Edge 在线端点
 - Edge 合成迁移到 `api.msedgeservices.com`（改用 `node-edge-tts`），修复旧 `speech.platform.bing.com` 端点 403 / 握手一直挂起的问题
