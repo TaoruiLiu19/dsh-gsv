@@ -8,6 +8,7 @@
 ![License](https://img.shields.io/npm/l/dsh-gsv-tts)
 [![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
 [![Voice Market](https://img.shields.io/badge/Voice%20Market-dsh--gsv-10b981?style=flat-square)](https://taoruiliu19.github.io/gsv-market/)
+[![DSH Insights health](https://dsh-insights.com/badge/TaoruiLiu19/dsh-gsv.svg)](https://dsh-insights.com/p/TaoruiLiu19/dsh-gsv/?utm_source=badge&utm_medium=readme&utm_campaign=TaoruiLiu19/dsh-gsv)
 
 Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/gsv-market/) · Submission guide: [docs/VOICE_MARKET.md](docs/VOICE_MARKET.md)
 
