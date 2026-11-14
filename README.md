@@ -1,6 +1,6 @@
 # dsh-gsv-tts
 
-> 为 DSH（DeepSeek Harness）接入语音朗读能力 —— 双模式可选：**云端快速体验**（Edge，免安装、装上即听）+ **本地专业**（GSV-TTS-Lite，音色克隆、完全离线）。
+> 为 DSH（DeepSeek Harness）接入语音朗读能力 —— 三模式可选：**云端快速体验**（Edge，免安装、装上即听）+ **本地专业**（GSV-TTS-Lite，音色克隆、完全离线）+ **官方语音**（DeepSeek TTS，按字符计费、复用已有 Key）。
 
 ![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
@@ -19,6 +19,7 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 ## ✨ 功能亮点
 
 - 🌐 **云端快速体验（Edge）**：**零配置、装上即用**，无需 Python / 模型 / 引擎；20+ 种免费自然语言音色（晓晓、云希、Aria 等），联网即用，出声较快
+- ☁️ **官方语音（DeepSeek）**：官方 TTS 接口，音色 `stella`（海星）/ `tide`（暗潮），10 种语种按文本自动识别；按字符计费（刊例 3 元/万字符，汉字算 2 字符），复用已有 DeepSeek Key，**非默认模式**
 - 🖥️ **本地专业（GSV）**：按参考音频**克隆目标音色**、**完全离线**；由云端简单模式一键升级引导而来
 - 🔊 **一键朗读**：每条助手消息旁的 🔊 按钮直接朗读（自动排除思考内容）；长回复**流式播放**（首块到达即出声，不再等整段合成完），带暂停/继续/停止与进度显示，正在朗读的消息会高亮
 - ⚡ **首音更快**：可选**常驻模式（性能优先）**，插件加载后自动启动并预热默认音色；朗读走**流式 WAV**，长回复首音明显更快。默认**节能模式（资源优先）**，不后台占资源（与旧版一致）
@@ -32,12 +33,13 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 
 ---
 
-## 🎯 快速上手（两种模式，任选其一）
+## 🎯 快速上手（三种模式，任选其一）
 
 | 你的诉求 | 用哪种 | 怎么开始 |
 |---|---|---|
 | "我就想**装上就能听**" | 🌐 **快速体验（Edge）** | 见下方「一、快速体验模式」——**无需任何安装** |
 | "我要**克隆自己的声音 / 完全离线**" | 🖥️ **本地专业（GSV）** | 见下方「二、本地专业模式」 |
+| "我**已经有 DeepSeek Key**，想走官方通道" | ☁️ **官方语音（DeepSeek）** | 见下方「三、官方语音模式」——填 Key 即可，**按字符计费** |
 
 > **默认模式**：全新安装默认为 **Edge 快速体验**（联网即用）；**从旧版本升级的老用户仍保持 GSV 本地模式、声音不变**，可随时在设置面板切换。
 >
@@ -63,6 +65,20 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 
 > 本地模式全程离线运行，支持音色克隆，不依赖网络与云端配额。
 
+### 三、官方语音模式（DeepSeek，按量计费）
+
+1. 安装插件并重启 DSH
+2. 打开 设置 → 声音设置 → **TTS 模式**选 **官方语音（DeepSeek）**
+3. **无需填 Key**：插件默认复用 Harness 凭据服务里的 `DEEPSEEK_API_KEY`（就是模型设置里保存的那份，两者同一凭据）；只有想用另一份额度时，才在“DeepSeek API Key”里手填覆盖
+4. 音色下拉选 **海星（stella，女声）** 或 **暗潮（tide，男声）**，可先点「试听」对比
+5. 点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
+
+> **复用了什么**：插件通过 `ctx.get('credentials')` 按引用名解析 Key（默认 `DEEPSEEK_API_KEY`，可在“凭据名称”里改）。所以 Harness 里能正常对话，这里就能直接朗读；如果 Harness 只用了账号登录、没有保存 API Key，健康提示会告诉你先去模型设置里保存 Key（或导出同名环境变量）。若 Harness 用 `DEEPSEEK_BASE_URL` 指向网关，插件也沿用该地址请求 `/v1/tools/tts`。
+
+> **计费提醒**：官方接口按字符计费（刊例 3 元/万字符，汉字算 2 个字符，即 1000 汉字约 0.6 元；限时五折约 0.3 元）。开启**自动朗读**会持续产生费用，请按需开启。官方语音不支持调速、音色克隆与自定义音色，需要这些能力请用本地 GSV 模式。
+>
+> **Key 存储**：默认不往插件配置写 Key——用的是 Harness 凭据存储里的那份（`.credentials.yaml`，本就由 Harness 明文管理）；手填的 Key 才会进入插件配置。
+
 ## 📦 安装
 
 两种方式任选其一，然后在设置中启用：
@@ -87,33 +103,35 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 | 项 | 说明 |
 |---|---|
-| 如何切换 | 设置 → 声音设置 → **TTS 模式**（快速体验 / 本地专业），切换即时生效 |
-| 配置项 | `provider: 'edge' \| 'gsv'`（初始化分派，建议经设置面板切换，勿手动改） |
+| 如何切换 | 设置 → 声音设置 → **TTS 模式**（快速体验 / 官方语音 / 本地专业），切换即时生效 |
+| 配置项 | `provider: 'edge' \| 'deepseek' \| 'gsv'`（建议经设置面板切换，勿手动改） |
 | 老用户升级 | 无 `provider` 字段的旧配置：**有音色预设 → 保持 `gsv` 本地模式，声音不变** |
 | 全新安装 | 无音色预设 → 默认 `edge` 云端简单模式，联网即用 |
 | 写入时机 | 首次启动判定后写回一次（`settings.update`），之后不再改写 |
 | `schemaVersion` | 配置结构版本，迁移守卫的落点 |
 
-> Edge 模式需联网；若云端不可用，面板会提示"云端通道拥挤 / 暂不可用"，本地 GSV 模式始终可用作降级。
+> Edge / 官方语音模式需联网；若云端不可用，面板会提示"云端通道拥挤 / 暂不可用"，本地 GSV 模式始终可用作降级。
 
 ---
 
 ## 🏗️ 系统架构
 
-![dsh-gsv-tts 系统构成与数据流](docs/images/architecture.png)
+![dsh-gsv-tts 系统构成与三 provider 数据流](docs/images/architecture.png)
 
 > 📖 交互式架构图：[打开 dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html)（支持缩放、聚焦、主题切换）
 
-**双 provider 架构**：`TTSService` 按 `config.provider` 分发到云端（Edge）或本地（GSV），朗读主链路与工具调用两条路径对两种 provider 一致。
+**三 provider 架构**：`TTSService` 按 `config.provider` 分发到云端（Edge）、官方（DeepSeek）或本地（GSV），朗读主链路与工具调用两条路径对三种 provider 一致。
 
-- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → `TTSService` 按 provider 请求 → 云端/本地引擎返回音频块 → `AudioStore` 落盘 → 同源短链接回传浏览器播放。
+- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → `TTSService` 按 provider 请求 → 云端 / 官方 / 本地引擎返回音频 → `AudioStore` 落盘 → 同源短链接回传浏览器播放（首段 30 字，逐段即到即播）。
 - 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行，**不经 webServer HTTP 网关**。
+- 🔑 **凭据复用**：官方语音通过 Harness 的 `ctx.get('credentials')` 解析 `DEEPSEEK_API_KEY`，与模型鉴权同一份凭据，插件配置里不落 Key。
 
 | 构成 | 说明 |
 |------|------|
-| DSH 应用（DeepSeek Harness） | 插件宿主：Web 客户端、webServer、settings 服务 |
+| DSH 应用（DeepSeek Harness） | 插件宿主：Web 客户端、webServer、settings 服务、credentials 凭据服务 |
 | dsh-gsv-tts 插件 | `TTSService`（按 provider 分发）/ `AudioStore`（落盘）/ 引擎管理（启停·安装·健康检查） |
 | Edge provider | `edge-tts-universal`，微软精选网络音色，返回 MP3 流（浏览器解码） |
+| DeepSeek provider | 官方 `POST /v1/tools/tts`，海星 / 暗潮两个音色，返回 16-bit PCM WAV（重新装头落盘，长文本边收边写） |
 | GSV-TTS-Lite 本地引擎 | 本机 Python 进程，FastAPI :9880，真流式 `/tts/stream`，返回 WAV |
 
 ## 📸 截图
@@ -205,17 +223,19 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
-| TTS 模式 | 快速体验（Edge 云端，免安装）/ 本地专业（GSV，离线/克隆） | 老用户 `gsv` / 新装 `edge` |
+| TTS 模式 | 快速体验（Edge 云端，免安装）/ 官方语音（DeepSeek，按量计费）/ 本地专业（GSV，离线/克隆） | 老用户 `gsv` / 新装 `edge` |
 | 引擎开关 | 启动/停止 GSV-TTS-Lite 引擎进程 | 关 |
 | `engineMode` | 引擎启动方式：`always` 常驻模式（性能优先，自动启动+预热）/ `eco` 节能模式（资源优先，不后台启动，与旧版一致） | `eco` |
 | `apiUrl` | 引擎 API 地址 | `http://localhost:9880` |
-| `defaultVoice` | 默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个） | 空 |
+| `defaultVoice` | 默认音色（gsv=预设名 / edge=云端音色 id / deepseek=`stella`\|`tide`，留空用第一个） | 空 |
+| `deepseekApiKey` | 可选：手填 API Key，覆盖 Harness 凭据（用另一份额度时填） | 空 |
+| `deepseekApiKeyEnv` | 凭据引用名，决定复用 Harness 里的哪份 Key；留空则不查凭据服务 | `DEEPSEEK_API_KEY` |
 | `timeout` | 请求超时（毫秒） | `30000` |
 | `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
 | `autoPlay` | 自动朗读助手回复 | `false` |
 | `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
 | `voiceRegistryUrl` | 音色市场远端清单地址（默认指向在线试听站点；留空仅用包内离线清单） | 站点 URL |
-| `provider` | `gsv` \| `edge`（初始化分派，勿手动改；设置面板切换） | 见"TTS 模式" |
+| `provider` | `gsv` \| `edge` \| `deepseek`（勿手动改；设置面板切换） | 见"TTS 模式" |
 | `schemaVersion` | 配置结构版本（迁移守卫落点） | `1` |
 | `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |
 | `voices` | 音色预设列表 | 空 |
@@ -257,6 +277,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 - 配置 Schema：`@deepseek-ai/schemastery`（volatile 字段 + 就地热更新）
 - 设置面板：宿主 `settings` 服务（`describe`/`update`）+ 客户端 `configForms` 服务 + `settings.section` 插槽
 - 云端 Provider：`edge-tts-universal`（微软网络音色，MP3 流）
+- 官方 Provider：DeepSeek 官方 TTS（`/v1/tools/tts`，WAV），凭据走 Harness `credentials` 服务
 - 本地引擎：GSV-TTS-Lite 0.4.7
 - 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（本地流式 API）
 
@@ -281,6 +302,8 @@ pnpm publish      # 发布到 npm（files: lib, scripts, cordis.patch.yml）
 - 播放为 markdown 链接点击播放；内嵌 `<audio>` 需客户端扩展（规划中）
 - 合成音频存于系统临时目录（`%TEMP%/dsh-gsv-tts`），启动清空、会话内最多 200 个
 - Edge 云端模式依赖网络；微软限量限流时可能不可用（已有降级引导）
+- 官方语音按字符计费（约 0.3 元/千汉字），且不支持调速、音色克隆与自定义音色；自动朗读会持续产生费用
+- 官方语音需要 Harness 里已保存 `DEEPSEEK_API_KEY`（或同名环境变量）；只用账号登录、没有 API Key 时会提示补 Key
 - `tts_setup_engine` 通过 `child_process` 执行 pip/git，需环境有对应工具
 - `promptText` 留空依赖引擎 ASR 能力（能力探测），不支持时合成报错
 

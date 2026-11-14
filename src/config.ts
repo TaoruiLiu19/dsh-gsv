@@ -4,6 +4,8 @@ import type { Config, ProviderKind, VoicePreset } from './types.js';
 export const DEFAULT_API_URL = 'http://localhost:9880';
 export const DEFAULT_INSTALL_DIR = './GSV-TTS-Lite';
 export const DEFAULT_VOICE_REGISTRY_URL = 'https://taoruiliu19.github.io/gsv-market/voices.json';
+/** 默认凭据引用名：与 Harness 的 DeepSeek 模型鉴权同名，因此可直接复用已保存的 Key。 */
+export const DEFAULT_DEEPSEEK_KEY_REF = 'DEEPSEEK_API_KEY';
 export const SCHEMA_VERSION = 1;
 
 /**
@@ -37,9 +39,10 @@ export function readConfigValue<T>(value: unknown, fallback: T): T {
  * 未显式选择 provider 时的判定：
  * - 已配置音色预设 → gsv（老用户沿用本地专业模式，声音不变）
  * - 全新安装（无音色）→ edge（云端快速体验，装上即听）
+ * 显式选择（含 deepseek）一律尊重，避免把用户切回别的引擎。
  */
 export function resolveProviderKind(stored: unknown, voices: readonly VoicePreset[]): ProviderKind {
-  if (stored === 'edge' || stored === 'gsv') return stored;
+  if (stored === 'gsv' || stored === 'edge' || stored === 'deepseek') return stored;
   return voices.length > 0 ? 'gsv' : 'edge';
 }
 
@@ -77,6 +80,8 @@ export function snapshotConfig(raw: unknown): Config {
     voiceRegistryUrl: readConfigValue(source.voiceRegistryUrl, DEFAULT_VOICE_REGISTRY_URL),
     schemaVersion: readConfigValue(source.schemaVersion, SCHEMA_VERSION),
     provider: resolveProviderKind(readConfigValue<unknown>(source.provider, undefined), list),
+    deepseekApiKey: String(readConfigValue(source.deepseekApiKey, '') ?? ''),
+    deepseekApiKeyEnv: String(readConfigValue(source.deepseekApiKeyEnv, DEFAULT_DEEPSEEK_KEY_REF) ?? ''),
     quotaDaily: readConfigValue<number | null>(source.quotaDaily, null),
   };
 }

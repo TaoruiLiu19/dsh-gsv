@@ -2,6 +2,20 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.3.0] - 2026-11-14
+
+### Official voices (DeepSeek TTS)
+- Third TTS provider `deepseek`: calls `https://api.deepseek.com/v1/tools/tts` with voices `stella` and `tide`; language is auto-detected from the text
+- New "Official (DeepSeek)" mode; **zero setup**: resolves the key from the Harness credentials service via `ctx.get('credentials')` using `deepseekApiKeyEnv` (default `DEEPSEEK_API_KEY`) — the same credential as model auth, so no re-pasting
+- Optional `deepseekApiKey` overrides it (separate quota); a missing/unavailable credential service falls back to the same-named environment variable, and an empty reference name skips credentials entirely
+- The API returns complete WAV audio: the provider extracts 16-bit PCM per request; short text is written as one WAV, while full reads stream to disk with RIFF/data sizes backfilled, so memory does not grow with text length
+- Per-segment synthesis reports real duration (derived from sample format) for the progress bar
+- "Full audio / download" supports official voices through `synthesizeLong` on `/speak/full`
+- **Fix switching lag**: switching to Official Voices in settings took ~1s because the tab awaited a voices request while the health probe was a real 1–4s synthesis, queueing behind it. Now the tab switches locally with zero waiting, official voices come from a built-in list, the Edge list is cached, and health uses a free `GET /models` (measured 110–300ms, no billing)
+- Persist `defaultVoice` together with `provider` on switch so a config snapshot refresh cannot reset the dropdown
+- Official voices never start or warm up the local engine; a missing key produces an explicit health message instead of a silent failure
+- **Not released**: wait for real-device quality / latency / billing checks before choosing a version number
+
 ## [5.2.0] - 2026-11-10
 
 ### Edge online endpoint

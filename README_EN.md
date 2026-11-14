@@ -1,6 +1,6 @@
 # dsh-gsv-tts
 
-> Adds text-to-speech read-aloud to DSH (DeepSeek Harness) — dual-mode: **Cloud Quick Mode** (Edge, zero install, read as soon as it's added) + **Local Pro Mode** (GSV-TTS-Lite, voice cloning, fully offline).
+> Adds text-to-speech read-aloud to DSH (DeepSeek Harness) — three modes: **Cloud Quick Mode** (Edge, zero install, read as soon as it's added) + **Local Pro Mode** (GSV-TTS-Lite, voice cloning, fully offline) + **Official Voices** (DeepSeek TTS, billed per character, reuses your existing key).
 
 ![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
 ![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
@@ -19,6 +19,7 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 ## ✨ Features
 
 - 🌐 **Cloud Quick Mode (Edge)**: **zero configuration, ready to use** — no Python / models / engines needed; 20+ free natural voices (Xiaoxiao, Yunxi, Aria, etc.), online and fast to first audio
+- ☁️ **Official Voices (DeepSeek)**: the official TTS endpoint with `stella` (female) and `tide` (male), auto-detecting 10 languages; billed per character (CNY 3 per 10k characters, a Chinese character counts as 2), reusing your DeepSeek key — **not the default mode**
 - 🖥️ **Local Pro Mode (GSV)**: **clone a target voice from a reference audio**, **fully offline**; guided one-step upgrade from Cloud Quick Mode
 - 🔊 **One-click read-aloud**: a 🔊 button next to every assistant message (reasoning content excluded); long replies are **streamed** (first chunk starts playback; no need to wait for the whole reply), with Pause/Resume/Stop controls, a progress readout, and a highlight on the message being read
 - ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, so first audio on long replies is much faster. The default **Eco mode (resources first)** does not run in the background, same as before
@@ -32,12 +33,13 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 
 ---
 
-## 🎯 Quick Start (either mode)
+## 🎯 Quick Start (any of the three modes)
 
 | What you want | Which mode | How to begin |
 |---|---|---|
 | "I just want it to **read as soon as it's installed**" | 🌐 **Quick Mode (Edge)** | See "Quick Mode (Edge)" below — **no installation needed** |
 | "I want to **clone my own voice / be fully offline**" | 🖥️ **Local Pro Mode (GSV)** | See "Local Pro Mode (GSV)" below |
+| "I **already have a DeepSeek key** and want the official channel" | ☁️ **Official Voices (DeepSeek)** | See "Official Voices (DeepSeek)" below — paste the key, **billed per character** |
 
 > **Default mode**: fresh installs default to **Edge Quick Mode** (works online); **existing users upgrading keep GSV local mode with voices unchanged**, and can switch anytime in the settings panel.
 >
@@ -63,6 +65,20 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 
 > Local Pro mode runs fully offline and supports voice cloning — independent of network and cloud quotas.
 
+### Official Voices (DeepSeek, billed per character)
+
+1. Install the plugin and restart DSH
+2. Open Settings → Voice Settings → **TTS Mode** → select **Official (DeepSeek)**
+3. **No key needed**: the plugin resolves `DEEPSEEK_API_KEY` from the Harness credentials service by default — the same credential saved in model settings. Fill the optional key field only to bill a different quota
+4. Pick **Stella (female)** or **Tide (male)**; use "Preview" to compare them
+5. Click the 🔊 next to any assistant message, or have the agent call `tts_speak`
+
+> **What is reused**: `ctx.get('credentials')` resolves the key by reference name (default `DEEPSEEK_API_KEY`, editable under "Credential name"). If the Harness only uses account sign-in with no API key stored, the health line tells you to save a key in model settings (or export the env var).
+>
+> **Billing**: the official endpoint charges per character (CNY 3 per 10k characters; a Chinese character counts as 2, so ~CNY 0.6 per 1000 Chinese characters, ~CNY 0.3 at the current 50% discount). **Auto-read keeps generating cost** — enable it deliberately. Official voices do not support rate control, cloning or custom voices; use Local Pro for those.
+>
+> **Key storage**: nothing is written to the plugin config by default — the Harness credential store (`.credentials.yaml`, already managed by the Harness) supplies the key; only a manually entered key lands in plugin config.
+
 ## 📦 Installation
 
 Choose one of the two methods, then enable it in Settings:
@@ -87,8 +103,8 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 | Item | Description |
 |---|---|
-| How to switch | Settings → Voice Settings → **TTS Mode** (Quick / Local Pro), applied instantly |
-| Config field | `provider: 'edge' \| 'gsv'` (assigned at init; switch from the settings panel rather than editing manually) |
+| How to switch | Settings → Voice Settings → **TTS Mode** (Quick / Official / Local Pro), applied instantly |
+| Config field | `provider: 'edge' \| 'deepseek' \| 'gsv'` (switch from the settings panel rather than editing manually) |
 | Existing users upgrading | Old config with no `provider` field: **voices present → stays `gsv` local mode, voices unchanged** |
 | Fresh installs | No voices → defaults to `edge` cloud Quick mode, ready online |
 | When it is written | Resolved once on first boot and persisted via `settings.update`; never rewritten afterwards |
@@ -100,20 +116,22 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 
 ## 🏗️ Architecture
 
-![dsh-gsv-tts system composition & data flow](docs/images/architecture.png)
+![dsh-gsv-tts system composition & three-provider data flow](docs/images/architecture.png)
 
 > 📖 Interactive diagram: [open dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html) (zoom, focus, theme switching)
 
-**Dual-provider architecture**: `TTSService` dispatches to the cloud (Edge) or local (GSV) provider by `config.provider`; the read-aloud main path and the tool-call path are identical for both providers.
+**Three-provider architecture**: `TTSService` dispatches to the cloud (Edge), official (DeepSeek), or local (GSV) provider by `config.provider`; the read-aloud main path and the tool-call path are identical for all three.
 
-- 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → `TTSService` requests via the active provider → cloud/local engine returns audio chunks → `AudioStore` saves them → a same-origin short link is returned to the browser for playback.
+- 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → `TTSService` requests via the active provider → cloud / official / local engine returns audio → `AudioStore` saves it → a same-origin short link is returned to the browser (first segment is 30 chars, so playback starts early).
 - 🤖 **Agent tool calls (in-process, direct)**: when the agent calls `tts_speak` and friends, the host's in-process tools service executes the plugin logic **directly — no webServer HTTP gateway involved**.
+- 🔑 **Credential reuse**: Official Voices resolves `DEEPSEEK_API_KEY` through the Harness `ctx.get('credentials')` service — the same credential as model auth, so no key is stored in plugin config.
 
 | Part | Description |
 |------|-------------|
-| DSH app (DeepSeek Harness) | Plugin host: Web client, webServer, settings service |
+| DSH app (DeepSeek Harness) | Plugin host: Web client, webServer, settings service, credentials service |
 | dsh-gsv-tts plugin | `TTSService` (provider dispatch) / `AudioStore` (storage) / engine manager (start-stop · setup · health check) |
 | Edge provider | `edge-tts-universal`, curated Microsoft web voices, returns an MP3 stream (decoded by the browser) |
+| DeepSeek provider | Official `POST /v1/tools/tts`, Stella/Tide voices, returns 16-bit PCM WAV (re-wrapped and written to disk) |
 | GSV-TTS-Lite local engine | Local Python process, FastAPI :9880, true streaming `/tts/stream`, returns WAV |
 
 ## 📸 Screenshots
@@ -205,17 +223,19 @@ Download and inject voices from the Voice Market in one click — no need to fil
 
 | Field | Description | Default |
 |-------|-------------|---------|
-| TTS Mode | Quick (Edge cloud, zero setup) / Local Pro (GSV, offline & cloning) | existing users `gsv` / fresh installs `edge` |
+| TTS Mode | Quick (Edge cloud, zero setup) / Official (DeepSeek, billed) / Local Pro (GSV, offline & cloning) | existing users `gsv` / fresh installs `edge` |
 | Engine switch | Start/stop the GSV-TTS-Lite engine process | Off |
 | `engineMode` | Engine startup: `always` = Always-on (performance, auto-start + pre-warm) / `eco` = Eco (resources first, no background start, same as before) | `eco` |
 | `apiUrl` | Engine API URL | `http://localhost:9880` |
-| `defaultVoice` | Default voice (gsv=preset name / edge=cloud voice id; empty = first) | empty |
+| `defaultVoice` | Default voice (gsv=preset name / edge=cloud voice id / deepseek=`stella`\|`tide`; empty = first) | empty |
+| `deepseekApiKey` | Optional manual key that overrides the Harness credential | empty |
+| `deepseekApiKeyEnv` | Credential reference name; empty skips the credential service | `DEEPSEEK_API_KEY` |
 | `timeout` | Request timeout (ms) | `30000` |
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
 | `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
 | `voiceRegistryUrl` | Remote voice-market manifest URL (defaults to the online audition site; empty = bundled offline only) | site URL |
-| `provider` | `gsv` \| `edge` (assigned at init; switch in the settings panel) | see "TTS Mode" |
+| `provider` | `gsv` \| `edge` \| `deepseek` (switch in the settings panel) | see "TTS Mode" |
 | `schemaVersion` | Config schema version (migration guard marker) | `1` |
 | `quotaDaily` | Daily quota for cloud simple mode (`null` = unlimited; guidance only) | `null` |
 | `voices` | Voice preset list | empty |
@@ -257,6 +277,7 @@ Config is stored in the active profile's config layer (the `dsh-gsv-tts:` entry 
 - Config schema: `@deepseek-ai/schemastery` (volatile fields with in-place live updates)
 - Settings panel: host `settings` service (`describe`/`update`) + client `configForms` service + `settings.section` slots
 - Cloud provider: `edge-tts-universal` (Microsoft web voices, MP3 stream)
+- Official provider: DeepSeek TTS (`/v1/tools/tts`, WAV), credentials from the Harness `credentials` service
 - Local engine: GSV-TTS-Lite 0.4.7
 - Languages: TypeScript (host) / hand-written client bundle (browser) / Python (streaming API)
 
@@ -281,6 +302,8 @@ Full release history: [CHANGELOG_EN.md](CHANGELOG_EN.md).
 - Playback is a clickable markdown link; inline `<audio>` playback needs a client extension (planned)
 - Generated audio lives in the system temp dir (`%TEMP%/dsh-gsv-tts`), purged on startup, capped at 200 files per session
 - Edge cloud mode depends on network; when Microsoft rate-limits, it may be unavailable (already has a downgrade guide)
+- Official Voices bill per character (~CNY 0.3 per 1000 Chinese characters) and support neither rate control nor cloning; auto-read keeps generating cost
+- Official Voices need `DEEPSEEK_API_KEY` saved in the Harness (or the same-named env var); account-only sign-in prompts for a key
 - `tts_setup_engine` shells out to pip/git; those tools must be available
 - Empty `promptText` relies on the engine's ASR capability (capability-probed); synthesis fails with a clear error when unsupported
 

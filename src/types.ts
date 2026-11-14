@@ -24,14 +24,18 @@ export interface Config {
   voiceRegistryUrl: string;
   /** 配置结构版本（迁移守卫的落点标记） */
   schemaVersion: number;
-  /** TTS 引擎：gsv（本地 GSV-TTS-Lite，克隆/离线）| edge（微软 Edge 云端简单模式） */
+  /** TTS 引擎：gsv（本地克隆/离线）| edge（微软 Edge 云端）| deepseek（官方语音） */
   provider: ProviderKind;
+  /** DeepSeek 官方语音 API Key（可选覆盖；留空时先查 Harness 凭据服务，再查同名环境变量） */
+  deepseekApiKey: string;
+  /** 凭据引用名（默认 DEEPSEEK_API_KEY）：插件据此从 Harness 凭据服务复用已保存的 Key */
+  deepseekApiKeyEnv: string;
   /** 云端简单模式的每日配额（null = 不限量）；仅引导文案用，服务端硬计数留待 4.x */
   quotaDaily: number | null;
 }
 
 /** TTS 提供方类型。 */
-export type ProviderKind = 'gsv' | 'edge';
+export type ProviderKind = 'gsv' | 'edge' | 'deepseek';
 
 /** 提供方音色信息（edge = 微软官方声音；gsv = 本地预设）。 */
 export interface VoiceInfo {
@@ -49,8 +53,9 @@ export interface ProviderHealth {
   message?: string;
 }
 
-/** 提供方流式产出块：gsv 产出 PCM（sampleRate 必填，走 WAV 装配）；
- *  edge 产出 MP3 字节（audio/mpeg，零转码直接落盘）。 */
+/** 提供方流式产出块：gsv 产出 float32 PCM（sampleRate 必填，走 WAV 装配）；
+ *  edge 产出 MP3 字节（audio/mpeg，零转码直接落盘）；
+ *  deepseek 产出 16-bit PCM（audio/pcm-s16，24 kHz 单声道），结尾以 audio/meta 携带总时长。 */
 export interface ProviderChunk {
   mime: string;
   data: Uint8Array;

@@ -15,6 +15,7 @@ import { resolveProvider } from './migration.js';
 import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
 import { wavHeader, float32ToInt16 } from './wav-stream.js';
 import { EDGE_FALLBACK_VOICE, isEdgeVoiceId } from './providers/edge.js';
+import { DEEPSEEK_DEFAULT_VOICE, DeepseekProvider, isDeepseekVoiceId } from './providers/deepseek.js';
 import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
@@ -45,7 +46,7 @@ export const Config: any = Schema.object({
     id: Schema.string().description('注册表来源 id（注册表安装音色用）').default(''),
     source: Schema.string().description('音色来源：user 自定义 / registry 注册表安装').default('user'),
   })).default([]).description('音色预设列表，可在设置中自定义')),
-  defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id，留空用第一个）').default('')),
+  defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id / deepseek=官方音色 stella|tide，留空用第一个）').default('')),
   autoPlay: live(Schema.boolean().default(false).description('是否自动朗读助手回复')),
   engineMode: live(Schema.union([Schema.const('always'), Schema.const('eco')]).default('eco').description('引擎启动方式：always=常驻模式（性能优先，自动启动并预热）/ eco=节能模式（资源优先，不后台启动，与旧版一致）')),
   interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）')),
@@ -53,7 +54,9 @@ export const Config: any = Schema.object({
   installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
   voiceRegistryUrl: live(Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）')),
   schemaVersion: live(Schema.number().default(SCHEMA_VERSION).description('配置结构版本')),
-  provider: live(Schema.union([Schema.const('gsv'), Schema.const('edge')]).description('TTS 引擎：gsv 本地专业 / edge 云端简单模式（初始化分派，勿手动改）')),
+  provider: live(Schema.union([Schema.const('gsv'), Schema.const('edge'), Schema.const('deepseek')]).description('TTS 引擎：gsv 本地克隆 / edge 云端简单模式 / deepseek 官方语音（按字符计费）')),
+  deepseekApiKey: live(Schema.string().default('').description('DeepSeek 官方语音 API Key（可选覆盖；留空默认复用 Harness 凭据服务里的 DEEPSEEK_API_KEY）')),
+  deepseekApiKeyEnv: live(Schema.string().default('DEEPSEEK_API_KEY').description('凭据引用名：默认复用 Harness 已保存的 DEEPSEEK_API_KEY（模型设置页那个），留空则不查凭据服务')),
   quotaDaily: live(Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）')),
 });
 
@@ -76,7 +79,17 @@ export function apply(ctx: any, config: any) {
 
   const audioStore = new AudioStore(audioOrigin);
   const voiceManager = new VoiceManager(readConfig);
-  const tts = new TTSService(readConfig, audioStore, { voiceManager });
+  // 凭据服务（可能存在也可能不存在）：用于复用 Harness 已保存的 DEEPSEEK_API_KEY，
+  // 与模型鉴权读取同一份凭据，用户在插件里不必再填一次 Key。
+  const credentialsOf = () => {
+    try {
+      return ctx.get?.('credentials');
+    } catch {
+      return undefined;
+    }
+  };
+  const deepseekProvider = new DeepseekProvider({ getConfig: () => readConfig(), credentials: credentialsOf });
+  const tts = new TTSService(readConfig, audioStore, { voiceManager, deepseek: deepseekProvider });
   const setup = new EngineSetup(readConfig);
   // 引擎进程管理：单实例跨配置热更新存活（避免重载丢失子进程引用）
   const engineManager = new EngineManager();
@@ -116,24 +129,28 @@ export function apply(ctx: any, config: any) {
   };
   setTimeout(() => { void autoStartEngine(); }, 1500);
 
-  // 兼容旧配置：provider=edge 但 defaultVoice 仍是本地音色名时，云端口播会以 1007 失败。
-  // 自动把默认音色修成 Edge 的晓晓（只改 edge 模式，gsv 配置不动）。
+  // 兼容旧配置：provider 是云端（edge/deepseek）但 defaultVoice 仍是另一种模式的音色时，
+  // 云端口播会以 1007 / 400 失败。自动把默认音色修成该模式的默认音色（gsv 配置不动）。
   ctx.effect(() => {
     let disposed = false;
     const run = async () => {
       try { await ctx.root?.loader?.await?.(); } catch { /* 精简宿主 */ }
       if (disposed) return;
       const cfg = readConfig();
-      if (cfg.provider !== 'edge' || !cfg.defaultVoice || isEdgeVoiceId(cfg.defaultVoice)) return;
+      if (!cfg.defaultVoice) return;
+      let fallback: string | null = null;
+      if (cfg.provider === 'edge' && !isEdgeVoiceId(cfg.defaultVoice)) fallback = EDGE_FALLBACK_VOICE;
+      if (cfg.provider === 'deepseek' && !isDeepseekVoiceId(cfg.defaultVoice)) fallback = DEEPSEEK_DEFAULT_VOICE;
+      if (fallback === null) return;
       try {
-        await ctx.settings.update(entryId, { defaultVoice: EDGE_FALLBACK_VOICE });
+        await ctx.settings.update(entryId, { defaultVoice: fallback });
       } catch {
-        // 只读部署或设置服务未就绪：运行时仍由 EdgeProvider 回退
+        // 只读部署或设置服务未就绪：运行时仍由对应 Provider 回退
       }
     };
     void run();
     return () => { disposed = true; };
-  }, 'gsv-tts: repair-edge-voice');
+  }, 'gsv-tts: repair-cloud-voice');
 
   // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
   // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。
@@ -153,7 +170,7 @@ export function apply(ctx: any, config: any) {
       if (disposed) return;
       try {
         const raw = storedProvider(config?.provider);
-        if (raw === 'gsv' || raw === 'edge') return;
+        if (raw === 'gsv' || raw === 'edge' || raw === 'deepseek') return;
         const provider = resolveProvider(raw, readConfig().voices);
         await ctx.settings.update(entryId, { provider, schemaVersion: SCHEMA_VERSION });
         ctx.logger?.info?.('dsh-gsv-tts 已落定 provider=%s', provider);
@@ -175,10 +192,10 @@ export function apply(ctx: any, config: any) {
     },
   });
 
-  /** 当前 provider 的默认音色：edge → defaultVoice 或空串（服务端回落第一个）；gsv → 本地预设或 null。 */
+  /** 当前 provider 的默认音色：云端（edge/deepseek）→ defaultVoice 或空串（服务端回落默认）；gsv → 本地预设或 null。 */
   const resolveVoice = (): VoicePreset | string | null => {
     const cfg = readConfig();
-    if (cfg.provider === 'edge') return cfg.defaultVoice || '';
+    if (cfg.provider !== 'gsv') return cfg.defaultVoice || '';
     const preset = voiceManager.get();
     return preset ?? null;
   };
@@ -396,38 +413,52 @@ export function apply(ctx: any, config: any) {
         const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>;
         const url = new URL(String(req.url ?? '/'), 'http://localhost');
         const requested = body.provider ?? url.searchParams.get('provider');
-        const provider: ProviderKind = requested === 'edge' || requested === 'gsv' ? requested : readConfig().provider;
+        const provider: ProviderKind =
+          requested === 'edge' || requested === 'gsv' || requested === 'deepseek' ? requested : readConfig().provider;
         json(res, 200, { provider, voices: await tts.listVoices(provider) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
     },
   }));
-  // 当前 provider 的健康（edge = 试合成退避；gsv = 引擎状态）
+  // 当前 provider 的健康（edge = 试合成退避；deepseek = 免费 /models 探活；gsv = 引擎状态）
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-gsv-tts/provider/health',
-    handler: async (_req: any, res: any) => {
+    handler: async (req: any, res: any) => {
       try {
-        const provider: ProviderKind = readConfig().provider;
+        // 切换模式时客户端可能在写回配置前先探目标 provider，因此允许显式指定
+        const body = (await readJson(req).catch(() => ({}))) as { provider?: unknown };
+        const requested = body.provider;
+        const provider: ProviderKind =
+          requested === 'gsv' || requested === 'edge' || requested === 'deepseek' ? requested : readConfig().provider;
         json(res, 200, { provider, ...(await tts.health(provider)) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
     },
   }));
-  // 云端（Edge）音色试听：voice = 云端音色 id，强制走 edge 提供方
+  // 云端音色试听：voice = 云端音色 id，provider = edge|deepseek（缺省跟随当前云端模式）
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
     path: '/dsh-gsv-tts/provider/preview',
     handler: async (req: any, res: any) => {
       try {
-        const { voice } = await readJson(req);
+        const body = (await readJson(req)) as { voice?: unknown; provider?: unknown };
+        const voice = body.voice;
         if (typeof voice !== 'string' || !voice) {
           json(res, 400, { message: '缺少云端音色 id' });
           return;
         }
-        const r = await tts.synthesize(PREVIEW_TEXT, voice, undefined, 'edge');
+        // 客户端显式带 provider；旧客户端不带时按当前模式（gsv 时仍回退 edge，保持老行为）
+        const current = readConfig().provider;
+        const requested: ProviderKind =
+          body.provider === 'deepseek' || body.provider === 'edge'
+            ? body.provider
+            : current === 'gsv'
+              ? 'edge'
+              : current;
+        const r = await tts.synthesize(PREVIEW_TEXT, voice, undefined, requested);
         json(res, 200, { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: voice });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
@@ -756,7 +787,7 @@ export function apply(ctx: any, config: any) {
           return;
         }
         const cfg = readConfig();
-        if (cfg.provider !== 'edge') {
+        if (cfg.provider === 'gsv') {
           if (typeof voice === 'string') {
             json(res, 400, { message: '本地模式需要音色预设' });
             return;
@@ -773,6 +804,25 @@ export function apply(ctx: any, config: any) {
               bytes: r.bytes,
               parts: r.parts,
               voiceUsed: voice.name,
+            });
+          } finally {
+            res.off('close', onClose);
+          }
+          return;
+        }
+        if (cfg.provider === 'deepseek') {
+          // 官方语音：提供方按 2000 字切分，PCM 边收边写文件（内存不随文本线性增长）
+          const ac = new AbortController();
+          const onClose = () => ac.abort();
+          res.on('close', onClose);
+          try {
+            const r = await tts.synthesizeLongWav(text, typeof voice === 'string' ? voice : undefined, ac.signal);
+            json(res, 200, {
+              audioUrl: r.audioUrl,
+              duration: r.duration,
+              bytes: r.bytes,
+              parts: r.parts,
+              voiceUsed: typeof voice === 'string' ? voice : cfg.defaultVoice,
             });
           } finally {
             res.off('close', onClose);
@@ -842,10 +892,11 @@ export function apply(ctx: any, config: any) {
     timeoutMs: readConfig().timeout,
     async execute(args: { text: string; voice?: string }, exec: { signal: AbortSignal }) {
       const cfg = readConfig();
-      if (cfg.provider === 'edge') {
-        // 云端简单模式：voice 参数即 Edge 音色 id（不填用 defaultVoice/第一个）
+      if (cfg.provider !== 'gsv') {
+        // 云端模式（edge / deepseek）：voice 参数即云端音色 id（不填用 defaultVoice）
         const r = await tts.synthesize(args.text, args.voice, exec.signal);
-        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || cfg.defaultVoice || 'edge-default' };
+        const fallback = cfg.provider === 'deepseek' ? DEEPSEEK_DEFAULT_VOICE : 'edge-default';
+        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || cfg.defaultVoice || fallback };
       }
       const preset = voiceManager.get(args.voice);
       if (!preset) {
@@ -860,7 +911,7 @@ export function apply(ctx: any, config: any) {
   // ─── 工具 2: tts_list_voices ─── 列出当前 provider 可用音色 ───
   const listVoicesTool = defineTool({
     name: 'tts_list_voices',
-    description: '列出当前 TTS 模式下的可用音色：本地专业（gsv）= 预设列表；云端简单（edge）= 微软精选声音。',
+    description: '列出当前 TTS 模式下的可用音色：本地克隆（gsv）= 预设列表；Edge 云端（edge）= 微软精选声音；官方语音（deepseek）= 海星/暗潮。',
     parameters: {},
     output: {
       schema: {
@@ -884,7 +935,12 @@ export function apply(ctx: any, config: any) {
         additionalProperties: false,
       },
       render(_args: unknown, value: { provider: string; voices: Array<{ name: string; speakerAudioPath: string; isDefault: boolean }> }) {
-        const mode = value.provider === 'edge' ? '云端简单模式' : '本地专业模式';
+        const mode =
+          value.provider === 'deepseek'
+            ? 'DeepSeek 官方语音'
+            : value.provider === 'edge'
+              ? 'Edge 云端'
+              : '本地克隆模式';
         const lines = value.voices.map((v) =>
           `- **${v.name}**${v.isDefault ? '（默认）' : ''}: ${v.speakerAudioPath}`
         );
@@ -894,10 +950,10 @@ export function apply(ctx: any, config: any) {
     async execute() {
       const cfg = readConfig();
       const provider: ProviderKind = cfg.provider;
-      if (provider === 'edge') {
-        const voices = (await tts.listVoices('edge')).map((v) => ({
+      if (provider === 'edge' || provider === 'deepseek') {
+        const voices = (await tts.listVoices(provider)).map((v) => ({
           name: v.name,
-          speakerAudioPath: `edge://${v.id}`,
+          speakerAudioPath: `${provider}://${v.id}`,
           isDefault: v.id === cfg.defaultVoice,
         }));
         return { provider, voices, defaultVoice: cfg.defaultVoice || '' };

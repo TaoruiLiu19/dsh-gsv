@@ -6,6 +6,7 @@ import { splitIntoSegments } from './segmenter.js';
 import { float32ToInt16, wavHeader } from './wav-stream.js';
 import { GsvProvider } from './providers/gsv.js';
 import { EdgeProvider } from './providers/edge.js';
+import { DEEPSEEK_DEFAULT_VOICE, DeepseekProvider, buildWav16 } from './providers/deepseek.js';
 import type { AudioChunk, AudioStore } from './audio-store.js';
 import type {
   Config,
@@ -28,6 +29,7 @@ export class TTSService {
   private voiceManager: VoiceManager | undefined;
   private gsv: GsvProvider;
   private edge: EdgeProvider;
+  private deepseek: DeepseekProvider;
 
   /**
    * @param getConfig 读取当前生效配置（DSH 0.2+ 设置为 volatile 就地更新，
@@ -36,15 +38,19 @@ export class TTSService {
   constructor(
     private getConfig: () => Config,
     private audioStore: AudioStore,
-    opts?: { voiceManager?: VoiceManager; gsv?: GsvProvider; edge?: EdgeProvider },
+    opts?: { voiceManager?: VoiceManager; gsv?: GsvProvider; edge?: EdgeProvider; deepseek?: DeepseekProvider },
   ) {
     this.voiceManager = opts?.voiceManager;
     this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => this.getConfig(), voiceManager: opts?.voiceManager });
     this.edge = opts?.edge ?? new EdgeProvider();
+    this.deepseek = opts?.deepseek ?? new DeepseekProvider({ getConfig: () => this.getConfig() });
   }
 
   private provider(kind?: ProviderKind): TTSProvider {
-    return (kind ?? this.getConfig().provider ?? 'gsv') === 'edge' ? this.edge : this.gsv;
+    const resolved = kind ?? this.getConfig().provider ?? 'gsv';
+    if (resolved === 'edge') return this.edge;
+    if (resolved === 'deepseek') return this.deepseek;
+    return this.gsv;
   }
 
   /** 当前提供方音色列表（gsv = 本地预设；edge = 精选微软声音）。 */
@@ -81,7 +87,14 @@ export class TTSService {
       return this.synthesizeGsv(cleanText, preset, signal);
     }
     if (typeof voice === 'object' && voice !== null) {
-      throw new Error('Edge（云端简单）模式不支持本地音色预设，请在音色下拉选择云端声音');
+      throw new Error(
+        p.kind === 'deepseek'
+          ? 'DeepSeek 官方语音模式不支持本地音色预设，请在音色下拉选择官方音色（海星 / 暗潮）'
+          : 'Edge（云端简单）模式不支持本地音色预设，请在音色下拉选择云端声音',
+      );
+    }
+    if (p.kind === 'deepseek') {
+      return this.synthesizeDeepseek(cleanText, typeof voice === 'string' ? voice : undefined, signal);
     }
     return this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
   }
@@ -212,6 +225,77 @@ export class TTSService {
     }
     if (chunks.length === 0) throw new Error('未收到任何音频数据');
     const saved = this.audioStore.save(`tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`, chunks);
+    return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
+  }
+
+  /**
+   * 官方语音整段合成：/speak/full 用。
+   * 跳过单次 6000 字上限（提供方按 2000 字切分），但保留分段朗读的 30000 字总量上限；
+   * 音频边收边写文件，30 分钟量级的音频也不会把 PCM 全堆在内存里。
+   */
+  async synthesizeLongWav(
+    text: string,
+    voice?: string,
+    signal?: AbortSignal,
+  ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
+    const cleanText = TextCleaner.clean(text);
+    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
+    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
+      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
+    }
+    const id = voice || this.getConfig().defaultVoice || DEEPSEEK_DEFAULT_VOICE;
+    const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.wav`;
+    const file = join(this.audioStore.directory, name);
+    let sampleRate = 24000;
+    let pcmBytes = 0;
+    let duration = 0;
+    const fd = openSync(file, 'w');
+    try {
+      writeSync(fd, wavHeader(sampleRate));
+      for await (const chunk of this.deepseek.stream(cleanText, id, signal)) {
+        if (chunk.mime === 'audio/pcm-s16' && chunk.sampleRate) {
+          sampleRate = chunk.sampleRate;
+          if (chunk.data.length > 0) {
+            writeSync(fd, chunk.data);
+            pcmBytes += chunk.data.length;
+          }
+        }
+        if (chunk.totalDuration) duration = chunk.totalDuration;
+      }
+      if (pcmBytes === 0) throw new Error('未收到任何音频数据');
+      // 回填 RIFF/data 长度（wavHeader 写的是流式 0xFFFFFFFF）
+      const header = wavHeader(sampleRate);
+      header.writeUInt32LE(36 + pcmBytes, 4);
+      header.writeUInt32LE(pcmBytes, 40);
+      writeSync(fd, header, 0, header.length, 0);
+    } catch (e) {
+      try { closeSync(fd); } catch { /* 忽略 */ }
+      try { unlinkSync(file); } catch { /* 忽略 */ }
+      throw e;
+    }
+    closeSync(fd);
+    if (!duration) duration = pcmBytes / (sampleRate * 2);
+    return { audioUrl: this.audioStore.urlFor(name), duration, bytes: pcmBytes + 44, parts: 1 };
+  }
+
+  /** 官方语音：逐块收 PCM 后装一个 16-bit WAV 落盘；时长由提供方按采样参数算好（0 表示未知）。 */
+  private async synthesizeDeepseek(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
+    const id = voiceId || this.getConfig().defaultVoice || DEEPSEEK_DEFAULT_VOICE;
+    const pcm: Buffer[] = [];
+    let sampleRate = 24000;
+    let totalDuration = 0;
+    for await (const chunk of this.deepseek.stream(cleanText, id, signal)) {
+      if (chunk.mime === 'audio/pcm-s16' && chunk.sampleRate) {
+        sampleRate = chunk.sampleRate;
+        if (chunk.data.length > 0) pcm.push(Buffer.from(chunk.data));
+      }
+      if (chunk.totalDuration) totalDuration = chunk.totalDuration;
+    }
+    if (pcm.length === 0) throw new Error('DeepSeek 未返回音频数据');
+    const saved = this.audioStore.saveRaw(
+      `tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`,
+      buildWav16(Buffer.concat(pcm), sampleRate, 1),
+    );
     return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
   }
 

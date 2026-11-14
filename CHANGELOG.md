@@ -2,6 +2,20 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [5.3.0] - 2026-11-14
+
+### 官方语音（DeepSeek）
+- 新增第三种 TTS 提供方 `deepseek`：调用 `https://api.deepseek.com/v1/tools/tts`，音色 `stella`（海星）/ `tide`（暗潮），10 种语种按文本自动识别
+- 设置面板新增「官方语音（DeepSeek）」模式；**默认零填写**：通过 `ctx.get('credentials')` 按 `deepseekApiKeyEnv`（默认 `DEEPSEEK_API_KEY`）从 Harness 凭据服务复用模型鉴权那份 Key，不再要求用户重新粘贴
+- 可选 `deepseekApiKey` 手填覆盖（用独立额度）；凭据服务缺失/异常时回退同名环境变量；引用名留空则完全不查凭据
+- 官方接口返回完整 WAV：提供方逐段解出 16-bit PCM；短文本装 WAV 落盘，整段朗读边收边写文件（RIFF/data 长度回填），内存不随文本线性增长
+- 单段合成带真实时长（按采样参数换算），进度条可用
+- 「整段播放 / 下载」支持官方语音：`/speak/full` 走 `synthesizeLong`，一次落盘可 seek
+- **修复切换卡顿**：设置面板切到官方语音需等约 1 秒——切换前先 `await` 音色请求，且当时健康探活是真实试合成（1–4 秒），新请求排在它后面。现改为：先本地切换（零等待），官方音色用内置列表（不发请求），Edge 音色拉取一次后缓存，健康探活改用免费 `GET /models`（实测 110–300ms，且不再计费）
+- 切换时把 `defaultVoice` 与 `provider` 一并落定，避免配置快照刷新把下拉冲回旧值
+- 官方语音不参与本地引擎启停与预热；无 Key 时健康检查返回明确提示，不静默失败
+- **未发布**：等实机音质 / 首音延迟 / 实际扣费实测通过后再定版本号
+
 ## [5.2.0] - 2026-11-10
 
 ### Edge 在线端点
