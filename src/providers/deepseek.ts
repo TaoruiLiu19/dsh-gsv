@@ -1,5 +1,6 @@
 import { splitIntoSegments } from '../segmenter.js';
 import { DEFAULT_DEEPSEEK_KEY_REF } from '../config.js';
+import { defaultVoiceFor, isValidVoiceId } from '../catalog.js';
 import type { ProviderChunk, ProviderHealth, TTSProvider, VoiceInfo } from '../types.js';
 
 /**
@@ -118,7 +119,7 @@ export interface DeepseekProviderOptions {
    * Harness 凭据服务（`ctx.get('credentials')`）。
    * 存在时按引用名解析 Key，于是模型设置里保存的 DEEPSEEK_API_KEY 可直接复用，无需再填一次。
    */
-  credentials?: () => { resolve(ref: string): Promise<{ value?: string } | undefined> } | undefined;
+  credentials?: () => { resolve(ref: string): Promise<{ value?: string; source?: string } | undefined> } | undefined;
   /** 覆盖接口地址（测试用）。 */
   baseUrl?: string;
   /** 覆盖 fetch（测试用）。 */
@@ -173,6 +174,45 @@ export class DeepseekProvider implements TTSProvider {
     return String(this.env[refName] ?? '').trim();
   }
 
+  /**
+   * 凭据来源说明：只回答「有没有、从哪来」，绝不返回值。
+   * 供 tts_doctor 与设置面板显示，避免用户在两处配置之间迷路。
+   */
+  async describeCredential(): Promise<{ configured: boolean; source: 'config' | 'credentials' | 'env' | 'none' }> {
+    const cfg = this.opts.getConfig();
+    if (String(cfg.deepseekApiKey ?? '').trim()) return { configured: true, source: 'config' };
+    const refName = String(cfg.deepseekApiKeyEnv ?? '').trim();
+    if (!refName) return { configured: false, source: 'none' };
+
+    const service = this.opts.credentials?.();
+    if (service) {
+      try {
+        const hit = await service.resolve(refName);
+        const value = String(hit?.value ?? '').trim();
+        if (value) {
+          return { configured: true, source: hit?.source === 'env' ? 'env' : 'credentials' };
+        }
+      } catch {
+        // 凭据服务不可用：继续看环境变量
+      }
+    }
+    const envValue = String(this.env[refName] ?? '').trim();
+    return envValue ? { configured: true, source: 'env' } : { configured: false, source: 'none' };
+  }
+  /**
+   * 显式探活：验证凭据与网络（GET /models，免费、不产生合成费用）。
+   * 与 health() 不同，这里不走退避缓存，供 tts_doctor 的 deep 模式按需调用。
+   */
+  async checkCredential(): Promise<{ ok: boolean; message?: string }> {
+    const key = await this.apiKey();
+    if (!key) return { ok: false, message: '未找到 DeepSeek 凭据（凭据服务与同名环境变量都没有值）' };
+    try {
+      await this.probe(key);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, message: String((e as Error)?.message ?? e).slice(0, 200) };
+    }
+  }
   listVoices(): Promise<VoiceInfo[]> {
     return Promise.resolve(DEEPSEEK_VOICES.map((v) => ({ ...v })));
   }
@@ -225,7 +265,7 @@ export class DeepseekProvider implements TTSProvider {
   }
 
   async *stream(text: string, voice: string, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
-    const voiceId = isDeepseekVoiceId(voice) ? voice : DEEPSEEK_DEFAULT_VOICE;
+    const voiceId = isValidVoiceId('deepseek', voice) ? voice : defaultVoiceFor('deepseek');
     const parts = splitIntoSegments(text, DEEPSEEK_CHUNK_CHARS, 0);
     if (parts.length === 0) throw new Error('没有可合成的文本');
 

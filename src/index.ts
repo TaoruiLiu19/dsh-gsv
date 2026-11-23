@@ -2,8 +2,9 @@ import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { TTSService } from './tts.service.js';
 import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
@@ -14,8 +15,17 @@ import { VoiceRegistryManager } from './voice-registry.js';
 import { resolveProvider } from './migration.js';
 import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
 import { wavHeader, float32ToInt16 } from './wav-stream.js';
-import { EDGE_FALLBACK_VOICE, isEdgeVoiceId } from './providers/edge.js';
-import { DEEPSEEK_DEFAULT_VOICE, DeepseekProvider, isDeepseekVoiceId } from './providers/deepseek.js';
+import { DeepseekProvider } from './providers/deepseek.js';
+import {
+  GSV_ENGINE,
+  PROVIDER_CATALOG,
+  defaultVoiceFor,
+  getProviderDescriptor,
+  isValidVoiceId,
+  providerIds,
+} from './catalog.js';
+import { entriesForProvider, parseLexicon, previewLexicon } from './lexicon.js';
+import { buildDoctorReport, describeCredentialSource, type EngineFacts, type SetupFacts } from './doctor.js';
 import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
 
 export const name = 'dsh-gsv-tts';
@@ -54,8 +64,9 @@ export const Config: any = Schema.object({
   installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
   voiceRegistryUrl: live(Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）')),
   schemaVersion: live(Schema.number().default(SCHEMA_VERSION).description('配置结构版本')),
-  provider: live(Schema.union([Schema.const('gsv'), Schema.const('edge'), Schema.const('deepseek')]).description('TTS 引擎：gsv 本地克隆 / edge 云端简单模式 / deepseek 官方语音（按字符计费）')),
+  provider: live(Schema.union(providerIds().map((id) => Schema.const(id))).description('TTS 引擎：由 src/catalog.ts 目录定义（gsv 本地克隆 / edge 云端 / deepseek 官方语音）')),
   deepseekApiKey: live(Schema.string().default('').description('DeepSeek 官方语音 API Key（可选覆盖；留空默认复用 Harness 凭据服务里的 DEEPSEEK_API_KEY）')),
+  lexicon: live(Schema.string().default('').description('发音词典：每行 原词=读法，# 开头为注释；对所有模式生效（如 DSH=DeepSeek）')),
   deepseekApiKeyEnv: live(Schema.string().default('DEEPSEEK_API_KEY').description('凭据引用名：默认复用 Harness 已保存的 DEEPSEEK_API_KEY（模型设置页那个），留空则不查凭据服务')),
   quotaDaily: live(Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）')),
 });
@@ -89,7 +100,11 @@ export function apply(ctx: any, config: any) {
     }
   };
   const deepseekProvider = new DeepseekProvider({ getConfig: () => readConfig(), credentials: credentialsOf });
-  const tts = new TTSService(readConfig, audioStore, { voiceManager, deepseek: deepseekProvider });
+  const tts = new TTSService(readConfig, audioStore, {
+    voiceManager,
+    deepseek: deepseekProvider,
+    onFailure: (e) => noteFailure(e),
+  });
   const setup = new EngineSetup(readConfig);
   // 引擎进程管理：单实例跨配置热更新存活（避免重载丢失子进程引用）
   const engineManager = new EngineManager();
@@ -138,10 +153,13 @@ export function apply(ctx: any, config: any) {
       if (disposed) return;
       const cfg = readConfig();
       if (!cfg.defaultVoice) return;
-      let fallback: string | null = null;
-      if (cfg.provider === 'edge' && !isEdgeVoiceId(cfg.defaultVoice)) fallback = EDGE_FALLBACK_VOICE;
-      if (cfg.provider === 'deepseek' && !isDeepseekVoiceId(cfg.defaultVoice)) fallback = DEEPSEEK_DEFAULT_VOICE;
-      if (fallback === null) return;
+      const descriptor = getProviderDescriptor(cfg.provider);
+      if (!descriptor) return;
+      // 本地预设名称是任意字符串；只有声明了 voiceIdPattern 的 provider 才需要修
+      if (descriptor.capabilities.voiceSource === 'presets') return;
+      if (isValidVoiceId(cfg.provider, cfg.defaultVoice)) return;
+      const fallback = descriptor.defaultVoice;
+      if (!fallback) return;
       try {
         await ctx.settings.update(entryId, { defaultVoice: fallback });
       } catch {
@@ -170,7 +188,7 @@ export function apply(ctx: any, config: any) {
       if (disposed) return;
       try {
         const raw = storedProvider(config?.provider);
-        if (raw === 'gsv' || raw === 'edge' || raw === 'deepseek') return;
+        if (typeof raw === 'string' && providerIds().includes(raw as ProviderKind)) return;
         const provider = resolveProvider(raw, readConfig().voices);
         await ctx.settings.update(entryId, { provider, schemaVersion: SCHEMA_VERSION });
         ctx.logger?.info?.('dsh-gsv-tts 已落定 provider=%s', provider);
@@ -201,8 +219,32 @@ export function apply(ctx: any, config: any) {
   };
 
   /** 合成失败分支：gsv 时优先给出"引擎未启动"明确原因；edge 时原样返回云端错误。 */
+  /** 最近一次合成失败：供 tts_doctor 解释为什么没声音；写盘以便插件重载后仍可诊断。 */
+  const LAST_FAILURE_FILE = join(tmpdir(), 'dsh-gsv-tts-last-failure.json');
+  let lastFailure: { at: number; provider: string; message: string } | null = null;
+  try {
+    const saved = JSON.parse(readFileSync(LAST_FAILURE_FILE, 'utf8')) as { at?: number; provider?: string; message?: string };
+    if (saved && typeof saved.at === 'number' && Date.now() - saved.at < 24 * 60 * 60 * 1000 && saved.message) {
+      lastFailure = { at: saved.at, provider: String(saved.provider ?? ''), message: String(saved.message) };
+    }
+  } catch {
+    // 没有历史失败或文件损坏：忽略
+  }
+  const noteFailure = (e: unknown): void => {
+    lastFailure = {
+      at: Date.now(),
+      provider: readConfig().provider,
+      message: String((e as Error)?.message ?? e).slice(0, 300),
+    };
+    try {
+      writeFileSync(LAST_FAILURE_FILE, JSON.stringify(lastFailure));
+    } catch {
+      // 诊断写盘失败不影响主流程
+    }
+  };
+
   const failSynthesis = async (res: any, e: unknown): Promise<void> => {
-    const msg = String((e as Error)?.message ?? e);
+    noteFailure(e);    const msg = String((e as Error)?.message ?? e);
     if (readConfig().provider === 'gsv') {
       const engineStatus = await engineCtl().status();
       if (!engineStatus.running) {
@@ -414,7 +456,9 @@ export function apply(ctx: any, config: any) {
         const url = new URL(String(req.url ?? '/'), 'http://localhost');
         const requested = body.provider ?? url.searchParams.get('provider');
         const provider: ProviderKind =
-          requested === 'edge' || requested === 'gsv' || requested === 'deepseek' ? requested : readConfig().provider;
+          typeof requested === 'string' && getProviderDescriptor(requested)
+            ? (requested as ProviderKind)
+            : readConfig().provider;
         json(res, 200, { provider, voices: await tts.listVoices(provider) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
@@ -431,13 +475,54 @@ export function apply(ctx: any, config: any) {
         const body = (await readJson(req).catch(() => ({}))) as { provider?: unknown };
         const requested = body.provider;
         const provider: ProviderKind =
-          requested === 'gsv' || requested === 'edge' || requested === 'deepseek' ? requested : readConfig().provider;
+          typeof requested === 'string' && getProviderDescriptor(requested)
+            ? (requested as ProviderKind)
+            : readConfig().provider;
         json(res, 200, { provider, ...(await tts.health(provider)) });
       } catch (e: any) {
         json(res, 500, { message: String(e?.message ?? e) });
       }
     },
   }));
+  // 提供方目录：客户端据此渲染模式 Tab、字段与能力，避免在 UI 里硬编码 provider 分支
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/provider/catalog',
+    handler: async (_req: any, res: any) => {
+      try {
+        json(res, 200, {
+          providers: PROVIDER_CATALOG,
+          engines: [GSV_ENGINE],
+          current: readConfig().provider,
+        });
+      } catch (e: any) {
+        json(res, 500, { message: String(e?.message ?? e) });
+      }
+    },
+  }));
+
+  // 词典预览：只做文本替换，不合成、不产生费用；可传草稿 lexicon 预览未保存的规则
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'exact',
+    path: '/dsh-gsv-tts/lexicon/preview',
+    handler: async (req: any, res: any) => {
+      try {
+        const body = (await readJson(req)) as { text?: unknown; lexicon?: unknown };
+        const text = typeof body.text === 'string' ? body.text : '';
+        if (!text.trim()) {
+          json(res, 400, { message: '缺少 text' });
+          return;
+        }
+        const raw = typeof body.lexicon === 'string' ? body.lexicon : readConfig().lexicon;
+        const provider = readConfig().provider;
+        const result = previewLexicon(text, parseLexicon(raw), provider);
+        json(res, 200, { provider, ...result });
+      } catch (e: any) {
+        json(res, 500, { message: String(e?.message ?? e) });
+      }
+    },
+  }));
+
   // 云端音色试听：voice = 云端音色 id，provider = edge|deepseek（缺省跟随当前云端模式）
   ctx.effect(() => ctx.webServer.register({
     kind: 'exact',
@@ -453,9 +538,9 @@ export function apply(ctx: any, config: any) {
         // 客户端显式带 provider；旧客户端不带时按当前模式（gsv 时仍回退 edge，保持老行为）
         const current = readConfig().provider;
         const requested: ProviderKind =
-          body.provider === 'deepseek' || body.provider === 'edge'
-            ? body.provider
-            : current === 'gsv'
+          typeof body.provider === 'string' && getProviderDescriptor(body.provider)
+            ? (body.provider as ProviderKind)
+            : current == 'gsv'
               ? 'edge'
               : current;
         const r = await tts.synthesize(PREVIEW_TEXT, voice, undefined, requested);
@@ -891,20 +976,25 @@ export function apply(ctx: any, config: any) {
     },
     timeoutMs: readConfig().timeout,
     async execute(args: { text: string; voice?: string }, exec: { signal: AbortSignal }) {
-      const cfg = readConfig();
-      if (cfg.provider !== 'gsv') {
-        // 云端模式（edge / deepseek）：voice 参数即云端音色 id（不填用 defaultVoice）
-        const r = await tts.synthesize(args.text, args.voice, exec.signal);
-        const fallback = cfg.provider === 'deepseek' ? DEEPSEEK_DEFAULT_VOICE : 'edge-default';
-        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || cfg.defaultVoice || fallback };
+      try {
+        const cfg = readConfig();
+        if (cfg.provider !== 'gsv') {
+          // 云端模式（edge / deepseek）：voice 参数即云端音色 id（不填用 defaultVoice）
+          const r = await tts.synthesize(args.text, args.voice, exec.signal);
+          const fallback = defaultVoiceFor(cfg.provider) || 'edge-default';
+          return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: args.voice || cfg.defaultVoice || fallback };
+        }
+        const preset = voiceManager.get(args.voice);
+        if (!preset) {
+          const available = voiceManager.list().map((v) => v.name).join(', ');
+          throw new Error(`未找到音色 "${args.voice}"。可用音色: ${available || '（无）'}`);
+        }
+        const r = await tts.synthesize(args.text, preset, exec.signal);
+        return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: preset.name };
+      } catch (e) {
+        noteFailure(e);
+        throw e;
       }
-      const preset = voiceManager.get(args.voice);
-      if (!preset) {
-        const available = voiceManager.list().map((v) => v.name).join(', ');
-        throw new Error(`未找到音色 "${args.voice}"。可用音色: ${available || '（无）'}`);
-      }
-      const r = await tts.synthesize(args.text, preset, exec.signal);
-      return { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: preset.name };
     },
   });
 
@@ -935,12 +1025,8 @@ export function apply(ctx: any, config: any) {
         additionalProperties: false,
       },
       render(_args: unknown, value: { provider: string; voices: Array<{ name: string; speakerAudioPath: string; isDefault: boolean }> }) {
-        const mode =
-          value.provider === 'deepseek'
-            ? 'DeepSeek 官方语音'
-            : value.provider === 'edge'
-              ? 'Edge 云端'
-              : '本地克隆模式';
+        const descriptor = getProviderDescriptor(value.provider);
+        const mode = descriptor ? descriptor.label : value.provider;
         const lines = value.voices.map((v) =>
           `- **${v.name}**${v.isDefault ? '（默认）' : ''}: ${v.speakerAudioPath}`
         );
@@ -950,7 +1036,8 @@ export function apply(ctx: any, config: any) {
     async execute() {
       const cfg = readConfig();
       const provider: ProviderKind = cfg.provider;
-      if (provider === 'edge' || provider === 'deepseek') {
+      const descriptor = getProviderDescriptor(provider);
+      if (descriptor && descriptor.capabilities.voiceSource !== 'presets') {
         const voices = (await tts.listVoices(provider)).map((v) => ({
           name: v.name,
           speakerAudioPath: `${provider}://${v.id}`,
@@ -1166,10 +1253,243 @@ export function apply(ctx: any, config: any) {
     },
   });
 
+  // ─── 工具: tts_lexicon_preview ─── 只做替换预览，不合成 ───
+  const lexiconPreviewTool = defineTool({
+    name: 'tts_lexicon_preview',
+    description: '预览发音词典会把一段文本读成什么（只做文本替换，不合成、不产生费用）。用于确认多音字/缩写修正是否命中。',
+    parameters: {
+      text: { type: 'string', description: '要预览的文本', required: true },
+      provider: { type: 'string', description: '按哪个模式的词典作用域预览（gsv/edge/deepseek；默认当前模式）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          provider: { type: 'string' },
+          before: { type: 'string' },
+          after: { type: 'string' },
+          hits: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                from: { type: 'string' },
+                to: { type: 'string' },
+                scope: { type: 'string' },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+        additionalProperties: false,
+      },
+      render(_args: unknown, value: { provider: string; before: string; after: string; hits: Array<{ from: string; to: string; scope: string }> }) {
+        const lines = [
+          `发音词典预览（${value.provider}）`,
+          `原文：${value.before}`,
+          `朗读：${value.after}`,
+        ];
+        if (value.hits.length === 0) lines.push('命中：无（检查拼写或作用域）');
+        else lines.push('命中：', ...value.hits.map((h) => `- [${h.scope}] ${h.from} → ${h.to}`));
+        return [{ type: 'text', text: lines.join('\n') }];
+      },
+    },
+    async execute(args: { text: string; provider?: string }) {
+      const cfg = readConfig();
+      const requested = typeof args.provider === 'string' ? args.provider : cfg.provider;
+      const provider = getProviderDescriptor(requested) ? (requested as ProviderKind) : cfg.provider;
+      const result = previewLexicon(args.text, parseLexicon(cfg.lexicon), provider);
+      return { provider, before: result.before, after: result.after, hits: result.hits };
+    },
+  });
+
+  // ─── 工具: tts_doctor ─── 解释「为什么没声音」 ───
+  const doctorTool = defineTool({
+    name: 'tts_doctor',
+    description:
+      '诊断语音链路：当前模式、凭据来源、引擎/模型/前置条件、最近一次失败，并给出修复建议（不返回密钥）。' +
+      '传 deep=true 会额外调用免费 GET /models 验证凭据，不产生合成费用。',
+    parameters: {
+      deep: { type: 'boolean', description: '深度探活：调用免费 GET /models 验证凭据（不产生合成费用）' },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        properties: {
+          provider: { type: 'string' },
+          mode: { type: 'string' },
+          verdict: { type: 'string' },
+          credentialConfigured: { type: 'boolean' },
+          credentialSource: { type: 'string' },
+          probeChecked: { type: 'boolean' },
+          probeOk: { type: 'boolean' },
+          probeMessage: { type: 'string' },
+          engineApplicable: { type: 'boolean' },
+          engineRunning: { type: 'boolean' },
+          engineInstalled: { type: 'boolean' },
+          missingModels: { type: 'array', items: { type: 'string' } },
+          pythonInstalled: { type: 'boolean' },
+          pythonVersion: { type: 'string' },
+          pipPackageInstalled: { type: 'boolean' },
+          repoCloned: { type: 'boolean' },
+          engineLog: { type: 'array', items: { type: 'string' } },
+          audioFiles: { type: 'number' },
+          lexiconRules: { type: 'number' },
+          lastFailure: { type: 'string' },
+          hints: { type: 'array', items: { type: 'string' } },
+        },
+        additionalProperties: false,
+      },
+      render(
+        _args: unknown,
+        v: {
+          mode: string;
+          verdict: string;
+          credentialConfigured: boolean;
+          credentialSource: string;
+          probeChecked: boolean;
+          probeOk: boolean;
+          probeMessage: string;
+          engineApplicable: boolean;
+          engineRunning: boolean;
+          engineInstalled: boolean;
+          missingModels: string[];
+          pythonInstalled: boolean;
+          pythonVersion: string;
+          pipPackageInstalled: boolean;
+          repoCloned: boolean;
+          engineLog: string[];
+          audioFiles: number;
+          lexiconRules: number;
+          lastFailure: string;
+          hints: string[];
+        },
+      ) {
+        const icon = v.verdict === 'ok' ? '✅' : v.verdict === 'degraded' ? '⚠️' : '❌';
+        const lines = [`${icon} 语音诊断：${v.mode} · ${v.verdict}`];
+        lines.push(
+          v.credentialConfigured
+            ? `• 凭据：已配置（${v.credentialSource}）`
+            : `• 凭据：未配置`,
+        );
+        if (v.probeChecked) {
+          lines.push(v.probeOk ? '• 探活：通过（GET /models）' : `• 探活：失败 — ${v.probeMessage || '未知原因'}`);
+        }
+        if (v.engineApplicable) {
+          lines.push(`• 引擎：${v.engineInstalled ? (v.engineRunning ? '运行中' : '已安装未运行') : '未安装'}`);
+          if (v.missingModels.length) lines.push(`• 缺失模型：${v.missingModels.join('、')}`);
+          if (!v.engineRunning) {
+            lines.push(
+              `• 前置条件：Python ${v.pythonInstalled ? (v.pythonVersion || '已安装') : '未安装'} · ` +
+                `gsv-tts-lite ${v.pipPackageInstalled ? '已安装' : '未安装'} · 仓库 ${v.repoCloned ? '已克隆' : '未克隆'}`,
+            );
+          }
+        }
+        lines.push(`• 音频缓存：${v.audioFiles} 个文件 · 发音词典：${v.lexiconRules} 条规则`);
+        if (v.lastFailure) lines.push(`• 最近失败：${v.lastFailure}`);
+        if (v.engineLog.length) {
+          lines.push('', '引擎日志（末尾）：', ...v.engineLog.slice(-5).map((l) => `  ${l}`));
+        }
+        if (v.hints.length) lines.push('', '建议：', ...v.hints.map((h) => `- ${h}`));
+        return [{ type: 'text', text: lines.join('\n') }];
+      },
+    },
+    async execute(args: { deep?: boolean }) {
+      const cfg = readConfig();
+      const descriptor = getProviderDescriptor(cfg.provider);
+      const credential = await tts.describeCredential(cfg.provider);
+      const needsEngine = descriptor?.capabilities.needsEngine ?? false;
+      const needsKey = descriptor?.capabilities.needsKey ?? false;
+
+      let probe: { checked: boolean; ok: boolean; message?: string } | undefined;
+      if (args.deep && needsKey) {
+        const result = await tts.checkCredential(cfg.provider);
+        probe = { checked: true, ok: result.ok, message: result.message };
+      }
+
+      let engine: EngineFacts | undefined;
+      let setupFacts: SetupFacts | undefined;
+      let engineLog: string[] = [];
+      if (needsEngine) {
+        const status = await engineCtl().status();
+        const modelsDir = existsSync(join(cfg.installDir, 'models'))
+          ? join(cfg.installDir, 'models')
+          : join(cfg.installDir, 'API', 'models');
+        engine = {
+          running: status.running,
+          apiUrl: cfg.apiUrl,
+          startScriptExists: existsSync(join(cfg.installDir, GSV_ENGINE.startScript)),
+          models: GSV_ENGINE.models.map((m) => ({ ...m, present: existsSync(join(modelsDir, m.file)) })),
+        };
+        try {
+          const h = await setup.healthCheck();
+          setupFacts = {
+            pythonInstalled: h.pythonInstalled,
+            pythonVersion: h.pythonVersion,
+            pipPackageInstalled: h.pipPackageInstalled,
+            repoCloned: h.repoCloned,
+          };
+        } catch {
+          // 健康检查失败不影响其余诊断
+        }
+        try {
+          const log = readFileSync(join(tmpdir(), 'dsh-gsv-tts-engine.log'), 'utf8');
+          engineLog = log
+            .trimEnd()
+            .split(/\r?\n/)
+            .slice(-12)
+            .map((line) => line.replace(/\s+/g, ' ').trim().slice(0, 300));
+        } catch {
+          engineLog = [];
+        }
+      }
+
+      const report = buildDoctorReport({
+        provider: cfg.provider,
+        descriptor,
+        credential,
+        engine,
+        probe,
+        setup: setupFacts,
+        engineLog,
+        audio: audioStore.stats(),
+        lexiconRules: entriesForProvider(parseLexicon(cfg.lexicon), cfg.provider).length,
+        lastFailure,
+      });
+      return {
+        provider: report.provider,
+        mode: report.mode,
+        verdict: report.verdict,
+        credentialConfigured: credential.configured,
+        credentialSource: describeCredentialSource(credential.source),
+        probeChecked: report.probe?.checked ?? false,
+        probeOk: report.probe?.ok ?? false,
+        probeMessage: report.probe?.message ?? '',
+        engineApplicable: needsEngine,
+        engineRunning: report.engine?.running ?? false,
+        engineInstalled: report.engine?.startScriptExists ?? false,
+        missingModels: (report.engine?.models ?? []).filter((m) => m.required && !m.present).map((m) => m.file),
+        pythonInstalled: report.setup?.pythonInstalled ?? false,
+        pythonVersion: report.setup?.pythonVersion ?? '',
+        pipPackageInstalled: report.setup?.pipPackageInstalled ?? false,
+        repoCloned: report.setup?.repoCloned ?? false,
+        engineLog: report.engineLog,
+        audioFiles: report.audio.fileCount,
+        lexiconRules: report.lexiconRules,
+        lastFailure: report.lastFailure
+          ? `${report.lastFailure.agoSeconds} 秒前：${report.lastFailure.message}`
+          : '',
+        hints: report.hints,
+      };
+    },
+  });
+
   // ─── 注册所有工具 ───
   ctx.tools.register(speakTool);
   ctx.tools.register(listVoicesTool);
   ctx.tools.register(healthCheckTool);
+  ctx.tools.register(doctorTool);
+  ctx.tools.register(lexiconPreviewTool);
   ctx.tools.register(setupEngineTool);
   ctx.tools.register(voiceRegistryTool);
   ctx.tools.register(voiceInstallTool);

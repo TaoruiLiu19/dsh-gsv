@@ -1,6 +1,7 @@
 import { listVoices as libListVoices } from 'edge-tts-universal';
 import { EdgeTTS } from 'node-edge-tts';
 import type { ProviderChunk, ProviderHealth, TTSProvider, VoiceInfo } from '../types.js';
+import { defaultVoiceFor, isValidVoiceId } from '../catalog.js';
 
 interface EdgeStreamMessage {
   type?: string;
@@ -154,7 +155,7 @@ export class EdgeProvider implements TTSProvider {
   async *stream(text: string, voice: string, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
     // 兼容旧配置：provider=edge 但 defaultVoice 还是本地音色名（如「拉菲」）。
     // 非法 id 会让 Edge 以 1007 关闭，这里回退到默认可用的晓晓。
-    const voiceId = isEdgeVoiceId(voice) ? voice : EDGE_FALLBACK_VOICE;
+    const voiceId = isValidVoiceId('edge', voice) ? voice : (defaultVoiceFor('edge') || EDGE_FALLBACK_VOICE);
     const c = new this.lib.Communicate(text, { voice: voiceId });
     const it = c.stream();
     try {

@@ -72,6 +72,10 @@ export class AudioStore {
     return { url: this.urlFor(name), name };
   }
 
+  /** 诊断用：目录与当前会话文件数（不读文件内容）。 */
+  stats(): { directory: string; fileCount: number } {
+    return { directory: this.dir, fileCount: this.listFiles().length };
+  }
   get directory(): string {
     return this.dir;
   }

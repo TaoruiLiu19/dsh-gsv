@@ -137,6 +137,7 @@ function renderSection({ provider, deepseekApiKey = '' }) {
 
 const hasText = (list, text) => list.some((n) => n.props && n.props.children === text);
 const passwordInput = (list) => list.find((n) => n.type === 'input' && n.props && n.props.type === 'password');
+const lexiconBox = (list) => list.find((n) => n.type === 'textarea');
 const optionIds = (list) => {
   const select = list.find((n) => n.type === 'select');
   if (!select || !Array.isArray(select.props.children)) return [];
@@ -148,6 +149,7 @@ test('deepseek 模式：渲染出官方 Tab、Key 输入与官方音色说明', 
   assert.ok(hasText(list, 'mode.official'), '模式 Tab 含“官方语音”');
   assert.ok(hasText(list, 'mode.officialDesc'), '展示官方语音说明');
   assert.ok(hasText(list, 'field.apiKey'), '展示 Key 标签');
+  assert.ok(lexiconBox(list), '发音词典对所有模式可见');
   assert.ok(hasText(list, 'field.apiKeyReuse'), '提示默认复用 Harness 凭据');
   assert.ok(hasText(list, 'field.apiKeyRef'), '展示凭据名称字段');
   const key = passwordInput(list);

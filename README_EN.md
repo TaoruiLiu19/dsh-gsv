@@ -25,6 +25,8 @@ Voice Market: [taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/g
 - ⚡ **Faster first audio**: **Always-on mode (performance)** starts and pre-warms the engine with the plugin; read-aloud uses a **streaming WAV**, so first audio on long replies is much faster. The default **Eco mode (resources first)** does not run in the background, same as before
 - ⏩ **Full audio / download + read selection**: the floating player offers a "Full" action that produces a seekable, downloadable complete audio file; selected chat text can be read on its own. Normal read-aloud still streams, so first audio is unchanged
 - 🔁 **Auto-read**: automatically reads assistant replies; new replies interrupt the current read by default (barge-in), toggleable in settings
+- 🗣️ **Pronunciation lexicon**: one `word=reading` per line fixes polyphones, acronyms and names (e.g. `DSH=DeepSeek`); per-mode sections and a zero-cost preview, shared by **all three modes**
+- 🩺 **One-command diagnosis**: `tts_doctor` reports the credential source, engine/model gaps, the last failure and the next action
 - 🔄 **Mode switching**: one click in the settings panel between "Quick / Local Pro"; voices and status follow live
 - 🎛️ **Voice Settings panel**: configure everything visually, **hot-applied** (no restart); preview any voice individually or loop-preview all for comparison
 - 🎪 **Voice Market**: **one-click download and injection** of voices from the bundled or a custom remote manifest, with preview-before-install and read-only management; bundled trusted sources install without confirmation, remote sources require a second confirmation; [submit your favorite voices](docs/VOICE_MARKET.md)
@@ -125,6 +127,7 @@ After installing, restart DSH. The tools register automatically and a "Voice Set
 - 🔊 **Read-aloud path (via webServer)**: user clicks 🔊 → DSH Web client → the `webServer` `/speak` route → `TTSService` requests via the active provider → cloud / official / local engine returns audio → `AudioStore` saves it → a same-origin short link is returned to the browser (first segment is 30 chars, so playback starts early).
 - 🤖 **Agent tool calls (in-process, direct)**: when the agent calls `tts_speak` and friends, the host's in-process tools service executes the plugin logic **directly — no webServer HTTP gateway involved**.
 - 🔑 **Credential reuse**: Official Voices resolves `DEEPSEEK_API_KEY` through the Harness `ctx.get('credentials')` service — the same credential as model auth, so no key is stored in plugin config.
+- 🧭 **Catalog-driven**: `src/catalog.ts` is the single source of truth for provider capabilities (engine/key/billing/voice source/default voice) and the local engine model list; the client renders mode tabs and fields from `/provider/catalog`, and routes, tools and migration read the same descriptors.
 
 | Part | Description |
 |------|-------------|
@@ -234,6 +237,7 @@ Download and inject voices from the Voice Market in one click — no need to fil
 | `installDir` | Engine install directory | `./GSV-TTS-Lite` |
 | `autoPlay` | Auto-read assistant replies | `false` |
 | `interruptOnNew` | Whether new replies interrupt the current read in auto-read mode (off = skip new replies while reading to avoid overlap) | `true` |
+| `lexicon` | Pronunciation lexicon (multi-line `word=reading`, `[deepseek]/[gsv]/[edge]` sections, `#` comments), applies to every mode | empty |
 | `voiceRegistryUrl` | Remote voice-market manifest URL (defaults to the online audition site; empty = bundled offline only) | site URL |
 | `provider` | `gsv` \| `edge` \| `deepseek` (switch in the settings panel) | see "TTS Mode" |
 | `schemaVersion` | Config schema version (migration guard marker) | `1` |
@@ -251,12 +255,52 @@ Download and inject voices from the Voice Market in one click — no need to fil
 
 Config is stored in the active profile's config layer (the `dsh-gsv-tts:` entry of `~/.dsh/profiles/<profile>/cordis.patch.yml`). Since DSH 0.2 these fields are **volatile config**: a settings save updates the config references in place, so the plugin reads the new values without a reload.
 
+### Using the pronunciation lexicon
+
+Settings → Voice Settings → **Pronunciation lexicon**: one entry per line, applied on save.
+
+```
+# lines starting with # or // are comments; unsectioned entries apply everywhere
+DSH=DeepSeek
+
+[deepseek]
+API=A P I
+
+[gsv]
+GSV=G S V
+```
+
+Rules (borrowing VoiceStudio's dictionary design):
+
+- `word=reading` (or `=>`), matched **literally**, not as regex;
+- Unicode case-insensitive (CJK unaffected);
+- **longest match wins**; for equal length, **the later entry wins**;
+- a more specific scope wins: `[deepseek]` overrides the global entry of the same word;
+- a single pass only (no A→B→C chaining).
+
+It runs after text cleaning and before segmentation, so all three modes, `tts_speak`, auto-read and full-audio reads pick it up. To check what a sentence will actually say without synthesizing (zero cost):
+
+```
+tts_lexicon_preview text="how do DSH and GSV sound"
+```
+
+### When there is no sound, run `tts_doctor`
+
+```
+tts_doctor            # local facts: credential, engine, models, last failure
+tts_doctor deep=true  # also validates the key via the free GET /models (no synthesis cost)
+```
+
+It reports the active mode, credential presence and source (plugin settings / Harness credentials / environment), the **deep probe result**, whether the engine is installed and running, missing model files, **Python / pip package / repo prerequisites**, the most recent failure (within 10 minutes), **the tail of the engine log**, audio-cache count and lexicon rule count, plus concrete next steps (e.g. "not installed: run tts_setup_engine", "missing model: s1v3.ckpt"). It **never returns a key**.
+
 ## 🧰 Tools
 
 | Tool | Purpose |
 |------|---------|
 | `tts_speak` | Text-to-speech; uses the active provider & voice, streams, returns a same-origin short link |
 | `tts_list_voices` | List voices available for the active provider |
+| `tts_doctor` | Diagnose "why is there no sound": credential source, engine/model/prerequisites, last failure, next steps; `deep=true` probes free |
+| `tts_lexicon_preview` | Preview what the pronunciation lexicon will read (replace only, no synthesis, no cost) |
 | `tts_health_check` | Check the active provider (engine/cloud) status |
 | `tts_setup_engine` | One-click GSV-TTS-Lite engine installation |
 

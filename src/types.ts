@@ -30,6 +30,8 @@ export interface Config {
   deepseekApiKey: string;
   /** 凭据引用名（默认 DEEPSEEK_API_KEY）：插件据此从 Harness 凭据服务复用已保存的 Key */
   deepseekApiKeyEnv: string;
+  /** 发音词典（多行文本：`原词=读法`，`#` 开头为注释），对所有 provider 生效 */
+  lexicon: string;
   /** 云端简单模式的每日配额（null = 不限量）；仅引导文案用，服务端硬计数留待 4.x */
   quotaDaily: number | null;
 }

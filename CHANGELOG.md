@@ -2,6 +2,29 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [5.4.0] - 2026-11-23
+
+### 目录驱动（provider / 引擎目录）
+- 新增 `src/catalog.ts`：provider 描述符（能力、默认音色、i18n 键、badge）与 GSV 引擎模型清单（`s1v3.ckpt` / `s2Gv2ProPlus.pth`）
+- 设置面板从新增的 `/dsh-gsv-tts/provider/catalog` 渲染模式 Tab、字段与能力，不再硬编码 provider 分支；`isCloud`、Key 字段、本地区块、默认音色均由能力推导
+- 服务端路由校验、`tts_list_voices` 渲染与 provider 迁移守卫统一读同一份目录；客户端保留兜底目录，服务端不可用时仍可切换
+- 配置 schema 的 `provider` 联合类型改为由 `providerIds()` 生成；客户端遇到未知 provider 不再静默回落到 gsv，描述符回落也按 id 查找
+- 音色合法性（`voiceIdPattern`）与默认音色移入目录：Edge / DeepSeek 的硬编码校验改为 `isValidVoiceId` / `defaultVoiceFor`
+
+### 发音词典
+- 新增 `lexicon` 配置（多行 `原词=读法`，`#`/`//` 注释）与设置面板 textarea
+- 新增 `src/lexicon.ts`：长词优先、英文不区分大小写、单次替换不链式、坏行跳过
+- 在文本清洗之后、分段之前统一应用：`tts_speak`、自动朗读、整段朗读与三种 provider 全部生效
+- 支持按模式分节：`[edge]` / `[deepseek]` / `[gsv]`，更具体的作用域覆盖全局；未知分节后的规则跳过
+- 新增 `tts_lexicon_preview` 工具与 `/dsh-gsv-tts/lexicon/preview` 路由：只做文本替换预览，不合成、不产生费用
+
+### 可解释失败（tts_doctor）
+- 新增 `tts_doctor` 工具与 `src/doctor.ts`：凭据是否配置及来源（插件设置 / Harness 凭据服务 / 环境变量）、引擎安装与运行、缺失模型、最近 10 分钟失败、音频缓存与词典规则数，并给出可执行建议（不返回密钥）
+- `/speak` 失败与 `tts_speak` 工具异常都会记录最近失败，供诊断复用
+- 失败记录写入临时文件，插件重载后仍可诊断；并覆盖所有合成路径（`synthesize` / `streamPcm` / 整段朗读），由 `TTSService` 统一上报
+- 新增 `deep=true` 深度探活：调用免费 `GET /models` 验证凭据，不再只判断“有没有配置”
+- 本地模式补充前置条件检查（Python / gsv-tts-lite / 仓库）与引擎日志末尾 12 行，均进入报告与修复建议
+
 ## [5.3.0] - 2026-11-14
 
 ### 官方语音（DeepSeek）

@@ -300,3 +300,19 @@ test('resolveProviderKind：显式 deepseek 不被迁移守卫改写', () => {
   assert.equal(resolveProviderKind('deepseek', [{ name: 'x', speakerAudioPath: 'a', promptAudioPath: 'b', promptText: '' }]), 'deepseek');
   assert.equal(resolveProviderKind(undefined, []), 'edge');
 });
+
+test('TTSService：合成失败会触发 onFailure，且原异常继续抛出', async () => {
+  const failures = [];
+  const fake = {
+    kind: 'deepseek',
+    listVoices: async () => [],
+    stream: async function* () { throw new Error('boom'); },
+    health: async () => ({ available: true }),
+  };
+  const tts = new TTSService(() => ({ ...baseConfig, provider: 'deepseek' }), new AudioStore('http://host'), {
+    deepseek: fake,
+    onFailure: (e) => failures.push(String(e.message)),
+  });
+  await assert.rejects(() => tts.synthesize('你好'), /boom/);
+  assert.deepEqual(failures, ['boom']);
+});

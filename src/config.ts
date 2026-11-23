@@ -82,6 +82,7 @@ export function snapshotConfig(raw: unknown): Config {
     provider: resolveProviderKind(readConfigValue<unknown>(source.provider, undefined), list),
     deepseekApiKey: String(readConfigValue(source.deepseekApiKey, '') ?? ''),
     deepseekApiKeyEnv: String(readConfigValue(source.deepseekApiKeyEnv, DEFAULT_DEEPSEEK_KEY_REF) ?? ''),
+    lexicon: String(readConfigValue(source.lexicon, '') ?? ''),
     quotaDaily: readConfigValue<number | null>(source.quotaDaily, null),
   };
 }

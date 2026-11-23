@@ -6,7 +6,10 @@ import { splitIntoSegments } from './segmenter.js';
 import { float32ToInt16, wavHeader } from './wav-stream.js';
 import { GsvProvider } from './providers/gsv.js';
 import { EdgeProvider } from './providers/edge.js';
-import { DEEPSEEK_DEFAULT_VOICE, DeepseekProvider, buildWav16 } from './providers/deepseek.js';
+import { DeepseekProvider, buildWav16 } from './providers/deepseek.js';
+import { defaultVoiceFor } from './catalog.js';
+import { applyLexicon, parseLexicon } from './lexicon.js';
+import type { CredentialFacts } from './doctor.js';
 import type { AudioChunk, AudioStore } from './audio-store.js';
 import type {
   Config,
@@ -23,13 +26,13 @@ import type { VoiceManager } from './voice-manager.js';
 
 let fileCounter = 0;
 
-const EDGE_FALLBACK_VOICE = 'zh-CN-XiaoxiaoNeural';
 
 export class TTSService {
   private voiceManager: VoiceManager | undefined;
   private gsv: GsvProvider;
   private edge: EdgeProvider;
   private deepseek: DeepseekProvider;
+  private onFailure?: (e: unknown) => void;
 
   /**
    * @param getConfig 读取当前生效配置（DSH 0.2+ 设置为 volatile 就地更新，
@@ -38,12 +41,39 @@ export class TTSService {
   constructor(
     private getConfig: () => Config,
     private audioStore: AudioStore,
-    opts?: { voiceManager?: VoiceManager; gsv?: GsvProvider; edge?: EdgeProvider; deepseek?: DeepseekProvider },
+    opts?: {
+      voiceManager?: VoiceManager;
+      gsv?: GsvProvider;
+      edge?: EdgeProvider;
+      deepseek?: DeepseekProvider;
+      /** 失败回调：路由/工具层据此记录 lastFailure，供 tts_doctor 使用 */
+      onFailure?: (e: unknown) => void;
+    },
   ) {
     this.voiceManager = opts?.voiceManager;
+    this.onFailure = opts?.onFailure;
     this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => this.getConfig(), voiceManager: opts?.voiceManager });
     this.edge = opts?.edge ?? new EdgeProvider();
     this.deepseek = opts?.deepseek ?? new DeepseekProvider({ getConfig: () => this.getConfig() });
+  }
+
+  /**
+   * 统一入口：文本清洗 + 发音词典。
+   * 所有合成路径（单段 / 分段 / 流式 / 整段）都走这里，词典才不会只对某一条路径生效。
+   */
+  private prepareText(text: string, provider?: ProviderKind): string {
+    const cleaned = TextCleaner.clean(text);
+    const entries = parseLexicon(this.getConfig().lexicon);
+    if (entries.length === 0) return cleaned;
+    return applyLexicon(cleaned, entries, provider ?? this.getConfig().provider);
+  }
+  /** 统一失败上报：不吞异常，只旁路记录。 */
+  private reportFailure(e: unknown): void {
+    try {
+      this.onFailure?.(e);
+    } catch {
+      // 记录失败不影响主错误
+    }
   }
 
   private provider(kind?: ProviderKind): TTSProvider {
@@ -63,6 +93,18 @@ export class TTSService {
     return this.provider(kind).health();
   }
 
+  /** 显式探活（deep 模式）：云端走免费 /models；本地引擎不看凭据，直接视为通过。 */
+  async checkCredential(kind?: ProviderKind): Promise<{ ok: boolean; message?: string }> {
+    const p = this.provider(kind);
+    if (p.kind === 'deepseek') return this.deepseek.checkCredential();
+    return { ok: true };
+  }
+  /** 当前 provider 的凭据事实（只描述来源，不返回 Key）。 */
+  async describeCredential(kind?: ProviderKind): Promise<CredentialFacts> {
+    const p = this.provider(kind);
+    if (p.kind === 'deepseek') return this.deepseek.describeCredential();
+    return { configured: false, source: 'none' };
+  }
   /** 预热指定音色（缓存 speaker/prompt + 短推理），失败静默。 */
   warmupVoice(preset: VoicePreset): Promise<boolean> {
     return this.gsv.warmup(preset);
@@ -75,7 +117,8 @@ export class TTSService {
     signal?: AbortSignal,
     kind?: ProviderKind,
   ): Promise<SynthesizeResult> {
-    const cleanText = TextCleaner.clean(text);
+    try {
+    const cleanText = this.prepareText(text, kind);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_TEXT_LENGTH}），请分段朗读`);
@@ -84,7 +127,7 @@ export class TTSService {
     if (p.kind === 'gsv') {
       const preset = typeof voice === 'string' ? this.voiceManager?.get(voice) : voice;
       if (!preset) throw new Error('未指定音色预设');
-      return this.synthesizeGsv(cleanText, preset, signal);
+      return await this.synthesizeGsv(cleanText, preset, signal);
     }
     if (typeof voice === 'object' && voice !== null) {
       throw new Error(
@@ -94,14 +137,18 @@ export class TTSService {
       );
     }
     if (p.kind === 'deepseek') {
-      return this.synthesizeDeepseek(cleanText, typeof voice === 'string' ? voice : undefined, signal);
+      return await this.synthesizeDeepseek(cleanText, typeof voice === 'string' ? voice : undefined, signal);
     }
-    return this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
+    return await this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
+    } catch (e) {
+      this.reportFailure(e);
+      throw e;
+    }
   }
 
   /** 清洗并切分朗读文本：首段更短，后续段按 SEGMENT_MAX_CHARS 打包。 */
   planSegments(text: string): string[] {
-    const cleanText = TextCleaner.clean(text);
+    const cleanText = this.prepareText(text);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
@@ -154,8 +201,11 @@ export class TTSService {
     text: string,
     voice: VoicePreset,
     signal?: AbortSignal,
-  ): AsyncGenerator<{ sampleRate: number; data: Buffer }> {
-    const cleanText = TextCleaner.clean(text);
+  ): AsyncGenerator<{
+    sampleRate: number; data: Buffer
+  }> {
+    try {
+    const cleanText = this.prepareText(text);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
@@ -164,6 +214,10 @@ export class TTSService {
       if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate && chunk.data.length > 0) {
         yield { sampleRate: chunk.sampleRate, data: Buffer.from(chunk.data) };
       }
+    }
+    } catch (e) {
+      this.reportFailure(e);
+      throw e;
     }
   }
 
@@ -176,7 +230,7 @@ export class TTSService {
     voice: VoicePreset,
     signal?: AbortSignal,
   ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
-    const cleanText = TextCleaner.clean(text);
+    const cleanText = this.prepareText(text);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
@@ -201,6 +255,7 @@ export class TTSService {
       header.writeUInt32LE(pcmBytes, 40);
       writeSync(fd, header, 0, header.length, 0);
     } catch (e) {
+      this.reportFailure(e);
       try { closeSync(fd); } catch { /* 忽略 */ }
       try { unlinkSync(file); } catch { /* 忽略 */ }
       throw e;
@@ -238,12 +293,12 @@ export class TTSService {
     voice?: string,
     signal?: AbortSignal,
   ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
-    const cleanText = TextCleaner.clean(text);
+    const cleanText = this.prepareText(text);
     if (!cleanText) throw new Error('文本清洗后为空，无法合成');
     if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
       throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
     }
-    const id = voice || this.getConfig().defaultVoice || DEEPSEEK_DEFAULT_VOICE;
+    const id = voice || this.getConfig().defaultVoice || defaultVoiceFor('deepseek');
     const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.wav`;
     const file = join(this.audioStore.directory, name);
     let sampleRate = 24000;
@@ -280,7 +335,7 @@ export class TTSService {
 
   /** 官方语音：逐块收 PCM 后装一个 16-bit WAV 落盘；时长由提供方按采样参数算好（0 表示未知）。 */
   private async synthesizeDeepseek(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const id = voiceId || this.getConfig().defaultVoice || DEEPSEEK_DEFAULT_VOICE;
+    const id = voiceId || this.getConfig().defaultVoice || defaultVoiceFor('deepseek');
     const pcm: Buffer[] = [];
     let sampleRate = 24000;
     let totalDuration = 0;
@@ -300,7 +355,8 @@ export class TTSService {
   }
 
   private async synthesizeEdge(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const id = voiceId || this.getConfig().defaultVoice || EDGE_FALLBACK_VOICE;
+    const edgeFallback = defaultVoiceFor('edge') || 'zh-CN-XiaoxiaoNeural';
+    const id = voiceId || this.getConfig().defaultVoice || edgeFallback;
     const attempt = async (voice: string): Promise<Buffer[]> => {
       const parts: Buffer[] = [];
       for await (const chunk of this.edge.stream(cleanText, voice, signal)) {
@@ -323,9 +379,9 @@ export class TTSService {
       if (parts.length > 0) break;
       if (i < 2) await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
     }
-    if (parts.length === 0 && id !== EDGE_FALLBACK_VOICE) {
+    if (parts.length === 0 && id !== edgeFallback) {
       try {
-        parts = await attempt(EDGE_FALLBACK_VOICE);
+        parts = await attempt(edgeFallback);
       } catch (e) {
         if (signal?.aborted) throw e;
         lastError = e;

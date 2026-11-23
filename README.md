@@ -25,6 +25,8 @@ English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHA
 - ⚡ **首音更快**：可选**常驻模式（性能优先）**，插件加载后自动启动并预热默认音色；朗读走**流式 WAV**，长回复首音明显更快。默认**节能模式（资源优先）**，不后台占资源（与旧版一致）
 - ⏩ **整段播放 / 下载 + 朗读选中**：朗读时点浮动面板的「整段」可生成可拖动进度、可下载的完整音频；选中聊天文字可单独朗读。默认朗读仍走流式，不会因此变慢
 - 🔁 **自动朗读**：开启后自动朗读助手回复；新回复默认打断当前朗读（barge-in），可在设置中关闭
+- 🗣️ **发音词典**：一行 `原词=读法` 修正多音字、缩写与专名（如 `DSH=DeepSeek`），支持按模式分节与零成本预览，**三种模式共用**
+- 🩺 **一句诊断**：`tts_doctor` 直接告诉你凭据从哪来、引擎/模型缺什么、最近一次失败是什么、下一步该做什么
 - 🔄 **模式切换**：设置面板一键在"快速体验 / 本地专业"间切换，音色与状态实时跟随
 - 🎛️ **声音设置面板**：可视化配置，**保存即热生效**（无需重启）；每条音色可"试听"，或"全部试听"循环对比
 - 🎪 **音色市场**：从内置/自定义远端清单**一键下载并注入音色**，试听后安装、只读托管；内置可信源免确认，远端源二次确认；欢迎[投稿](docs/VOICE_MARKET.md)分享你喜欢的音色
@@ -125,6 +127,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 - 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → `TTSService` 按 provider 请求 → 云端 / 官方 / 本地引擎返回音频 → `AudioStore` 落盘 → 同源短链接回传浏览器播放（首段 30 字，逐段即到即播）。
 - 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行，**不经 webServer HTTP 网关**。
 - 🔑 **凭据复用**：官方语音通过 Harness 的 `ctx.get('credentials')` 解析 `DEEPSEEK_API_KEY`，与模型鉴权同一份凭据，插件配置里不落 Key。
+- 🧭 **目录驱动**：`src/catalog.ts` 是 provider 能力（是否需要引擎/凭据、是否计费、音色来源、默认音色）与本地引擎模型清单的唯一事实源；客户端从 `/provider/catalog` 渲染模式 Tab 与字段，服务端路由校验、工具渲染与迁移守卫读同一份描述符。
 
 | 构成 | 说明 |
 |------|------|
@@ -234,6 +237,7 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
 | `autoPlay` | 自动朗读助手回复 | `false` |
 | `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
+| `lexicon` | 发音词典（多行 `原词=读法`，`[deepseek]/[gsv]/[edge]` 分节，`#` 注释），所有模式生效 | 空 |
 | `voiceRegistryUrl` | 音色市场远端清单地址（默认指向在线试听站点；留空仅用包内离线清单） | 站点 URL |
 | `provider` | `gsv` \| `edge` \| `deepseek`（勿手动改；设置面板切换） | 见"TTS 模式" |
 | `schemaVersion` | 配置结构版本（迁移守卫落点） | `1` |
@@ -251,6 +255,44 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 
 配置保存在当前 profile 的配置层（`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `dsh-gsv-tts:` 条目）。DSH 0.2 起这些字段是 **volatile 配置**：设置面板保存后宿主就地更新配置引用，插件无需重载即可读到新值。
 
+### 发音词典怎么用
+
+设置 → 声音设置 → **发音词典**，一行一条，保存即生效；支持按模式分节：
+
+```
+# 注释行以 # 或 // 开头；未分节的规则对所有模式生效
+DSH=DeepSeek
+
+[deepseek]
+API=A P I
+
+[gsv]
+GSV=G S V
+```
+
+规则（参考 VoiceStudio 的词典设计）：
+
+- `原词=读法`（也接受 `=>`），**字面匹配**，不是正则；
+- Unicode 大小写不敏感（中文不受影响）；
+- **长词优先**；同长度时**后写的优先**；
+- 更具体的作用域优先：`[deepseek]` 的同名条目覆盖全局；
+- 只扫描一次，替换结果不会被再次替换（不会 A→B→C 链式）。
+
+词典在文本清洗之后、分段之前应用，所以三种模式、`tts_speak`、自动朗读、整段朗读全部生效。想确认某句话会被读成什么，可以不合成、零成本地预览：
+
+```
+tts_lexicon_preview text="DSH 和 GSV 怎么读"
+```
+
+### 没声音时先跑 `tts_doctor`
+
+```
+tts_doctor            # 本地事实：凭据、引擎、模型、最近失败
+tts_doctor deep=true  # 额外调用免费 GET /models 验证凭据（不产生合成费用）
+```
+
+输出包括：当前模式、凭据是否配置及来源（插件设置 / Harness 凭据服务 / 环境变量）、**深度探活结果**、引擎是否安装与运行、缺失的模型文件、**Python / pip 包 / 仓库等前置条件**、最近 10 分钟失败、**引擎日志末尾几行**、音频缓存数量与词典规则数，以及按事实给出的修复建议（例如“未安装：tts_setup_engine”“模型缺失：s1v3.ckpt”）。它**不会返回任何密钥**。
+
 ## 🧰 工具列表
 
 | 工具 | 功能 |
@@ -258,6 +300,8 @@ dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 | `tts_speak` | 文本转语音；按当前 provider 与音色选择，流式合成返回同源短链接 |
 | `tts_list_voices` | 列出当前 provider 可用音色 |
 | `tts_health_check` | 检查当前 provider（引擎/云端）状态 |
+| `tts_doctor` | 诊断“为什么没声音”：凭据来源、引擎/模型/前置条件、最近失败与修复建议；`deep=true` 免费探活 |
+| `tts_lexicon_preview` | 预览发音词典会把文本读成什么（只替换、不合成、不产生费用） |
 | `tts_setup_engine` | 一键安装本地 GSV-TTS-Lite 引擎 |
 
 ## ❓ 常见问题

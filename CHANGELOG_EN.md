@@ -2,6 +2,29 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [5.4.0] - 2026-11-23
+
+### Catalog-driven providers and engines
+- New `src/catalog.ts`: provider descriptors (capabilities, default voice, i18n key, badge) and the GSV engine model list (`s1v3.ckpt` / `s2Gv2ProPlus.pth`)
+- Settings renders mode tabs, fields and capabilities from the new `/dsh-gsv-tts/provider/catalog` endpoint instead of hard-coding provider branches; `isCloud`, key fields, local sections and default voice all derive from capabilities
+- Route validation, `tts_list_voices` rendering and the provider migration guard read the same catalog; the client keeps a fallback catalog so switching still works if the endpoint is unavailable
+- The config `provider` union is now generated from `providerIds()`; an unknown provider is no longer silently treated as gsv, and descriptor fallback looks up by id
+- Voice validity (`voiceIdPattern`) and the default voice moved into the catalog: hard-coded Edge/DeepSeek checks became `isValidVoiceId` / `defaultVoiceFor`
+
+### Pronunciation lexicon
+- New `lexicon` config (multi-line `word=reading`, `#`/`//` comments) with a settings textarea
+- New `src/lexicon.ts`: longest match first, ASCII case-insensitive, single pass without chaining, malformed lines skipped
+- Applied after text cleaning and before segmentation, covering `tts_speak`, auto-read, full-audio reads and all three providers
+- Per-mode sections (`[edge]` / `[deepseek]` / `[gsv]`) with the more specific scope overriding global; entries after an unknown section are skipped
+- New `tts_lexicon_preview` tool and `/dsh-gsv-tts/lexicon/preview` route: text replacement preview only, no synthesis and no cost
+
+### Explainable failures (tts_doctor)
+- New `tts_doctor` tool plus `src/doctor.ts`: credential presence and source (plugin settings / Harness credentials / env), engine installed and running, missing models, last failure within 10 minutes, audio cache and lexicon rule count, with actionable hints (never returns a key)
+- `/speak` failures and `tts_speak` tool errors record the last failure for diagnosis
+- The last failure is persisted to a temp file so it survives a plugin reload, and every synthesis path (`synthesize` / `streamPcm` / full reads) now reports through `TTSService`
+- New `deep=true` probe: validates the credential with the free `GET /models` instead of only checking presence
+- Local mode now checks prerequisites (Python / gsv-tts-lite / repo) and includes the last 12 engine log lines in the report and hints
+
 ## [5.3.0] - 2026-11-14
 
 ### Official voices (DeepSeek TTS)
