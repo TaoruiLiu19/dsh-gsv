@@ -2,82 +2,93 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "dsh-gsv-tts 5.3.0 系统构成与三 provider 数据流",
+    "title": "dsh-gsv-tts 5.4.0 系统构成与三 provider 数据流",
     "locale": "zh-CN",
     "output": "docs/architecture/dsh-gsv-tts.architecture.html",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/TaoruiLiu19/dsh-gsv",
-      "revision": "862c6039d80e0a390999d25e83489e0c955f942c"
+      "revision": "817127a044cae7d3bcaac29c9f56e7c4406d373a"
     }
   },
   "layout": { "mode": "grid" },
   "components": [
-    {
-      "id": "user",
-      "type": "external",
-      "label": "用户",
-      "sublabel": "点击 🔊 / 选中朗读",
-      "pos": [40, 300],
-      "size": [110, 64]
-    },
     {
       "id": "agent",
       "type": "backend",
       "label": "Agent（LLM）",
       "sublabel": "调用 tts_* 工具",
       "tag": "宿主 tools 服务",
-      "pos": [240, 60],
-      "size": [180, 64]
+      "pos": [40, 60],
+      "size": [180, 64],
+      "sources": [{ "path": "src/index.ts", "line": 1258, "end_line": 1310, "label": "tts_lexicon_preview / tts_doctor" }]
     },
     {
-      "id": "client",
-      "type": "frontend",
-      "label": "DSH Web 客户端",
-      "sublabel": "朗读按钮 · 设置面板",
-      "pos": [240, 300],
-      "size": [150, 72]
-    },
-    {
-      "id": "web",
+      "id": "catalog",
       "type": "backend",
-      "label": "DSH webServer",
-      "sublabel": "/speak · /speak/full · 音频路由",
-      "pos": [470, 300],
-      "size": [160, 72]
+      "label": "Provider 目录",
+      "sublabel": "能力 · 默认音色 · 音色规则",
+      "pos": [500, 60],
+      "size": [170, 64],
+      "sources": [
+        { "path": "src/catalog.ts", "line": 54, "end_line": 140, "label": "描述符与校验" },
+        { "path": "src/index.ts", "line": 490, "end_line": 500, "label": "目录路由" }
+      ]
     },
     {
-      "id": "settings",
-      "type": "database",
-      "label": "DSH settings",
-      "sublabel": "volatile 配置 · 热生效",
-      "pos": [240, 520],
-      "size": [150, 60]
-    },
-    {
-      "id": "store",
-      "type": "database",
-      "label": "AudioStore",
-      "sublabel": "WAV / MP3 落盘 · 同源短链接",
-      "pos": [470, 520],
-      "size": [160, 60],
-      "sources": [{ "path": "src/audio-store.ts", "line": 30, "end_line": 75, "label": "落盘与投递" }]
-    },
-    {
-      "id": "tts",
+      "id": "doctor",
       "type": "backend",
-      "label": "TTSService",
-      "sublabel": "按 provider 分派 · 分段合成",
-      "pos": [730, 300],
-      "size": [150, 72]
+      "label": "tts_doctor",
+      "sublabel": "探活 · 前置条件 · 引擎日志",
+      "pos": [760, 60],
+      "size": [170, 64],
+      "sources": [
+        { "path": "src/doctor.ts", "line": 88, "end_line": 160, "label": "诊断核心" },
+        { "path": "src/index.ts", "line": 1308, "end_line": 1312, "label": "工具定义" }
+      ]
     },
     {
       "id": "creds",
       "type": "security",
       "label": "Harness credentials",
       "sublabel": "ctx.get('credentials') · resolve",
-      "pos": [930, 40],
-      "size": [170, 64]
+      "pos": [1020, 60],
+      "size": [170, 64],
+      "sources": [{ "path": "src/index.ts", "line": 95, "end_line": 105, "label": "凭据接入" }]
+    },
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "点击 🔊 / 选中朗读",
+      "pos": [40, 220],
+      "size": [110, 64]
+    },
+    {
+      "id": "client",
+      "type": "frontend",
+      "label": "DSH Web 客户端",
+      "sublabel": "朗读按钮 · 设置面板",
+      "pos": [260, 220],
+      "size": [150, 72],
+      "sources": [{ "path": "lib/client.js", "line": 1015, "end_line": 1060, "label": "目录与字段" }]
+    },
+    {
+      "id": "web",
+      "type": "backend",
+      "label": "DSH webServer",
+      "sublabel": "/speak · /speak/full · 音频路由",
+      "pos": [500, 220],
+      "size": [160, 72]
+    },
+    {
+      "id": "tts",
+      "type": "backend",
+      "label": "TTSService",
+      "sublabel": "清洗 + 词典 · 按 provider 分派",
+      "pos": [760, 220],
+      "size": [150, 72],
+      "sources": [{ "path": "src/tts.service.ts", "line": 64, "end_line": 110, "label": "prepareText / 凭据" }]
     },
     {
       "id": "deepseek",
@@ -85,8 +96,46 @@
       "label": "DeepSeek provider",
       "sublabel": "海星 / 暗潮 · 官方 TTS",
       "tag": "provider=deepseek",
-      "pos": [930, 180],
-      "size": [170, 68]
+      "pos": [1020, 220],
+      "size": [170, 68],
+      "sources": [{ "path": "src/providers/deepseek.ts", "line": 133, "end_line": 175, "label": "官方提供方" }]
+    },
+    {
+      "id": "dsapi",
+      "type": "cloud",
+      "label": "DeepSeek TTS API",
+      "sublabel": "api.deepseek.com/v1/tools/tts",
+      "pos": [1280, 220],
+      "size": [180, 68]
+    },
+    {
+      "id": "settings",
+      "type": "database",
+      "label": "DSH settings",
+      "sublabel": "volatile 配置 · 热生效",
+      "pos": [260, 380],
+      "size": [150, 60]
+    },
+    {
+      "id": "lexicon",
+      "type": "backend",
+      "label": "发音词典",
+      "sublabel": "全局 / [provider] 分节 · 预览",
+      "pos": [500, 380],
+      "size": [160, 60],
+      "sources": [
+        { "path": "src/lexicon.ts", "line": 41, "end_line": 128, "label": "解析 / 应用 / 预览" },
+        { "path": "src/index.ts", "line": 507, "end_line": 520, "label": "预览路由" }
+      ]
+    },
+    {
+      "id": "store",
+      "type": "database",
+      "label": "AudioStore",
+      "sublabel": "WAV / MP3 落盘 · 同源短链接",
+      "pos": [760, 380],
+      "size": [150, 60],
+      "sources": [{ "path": "src/audio-store.ts", "line": 30, "end_line": 75, "label": "落盘与投递" }]
     },
     {
       "id": "edge",
@@ -94,9 +143,17 @@
       "label": "Edge provider",
       "sublabel": "微软网络音色 · MP3 流",
       "tag": "provider=edge",
-      "pos": [930, 320],
+      "pos": [1020, 380],
       "size": [170, 68],
-      "sources": [{ "path": "src/providers/edge.ts", "line": 118, "end_line": 160, "label": "Edge 提供方" }]
+      "sources": [{ "path": "src/providers/edge.ts", "line": 119, "end_line": 160, "label": "Edge 提供方" }]
+    },
+    {
+      "id": "edgeapi",
+      "type": "cloud",
+      "label": "微软 Edge 合成",
+      "sublabel": "api.msedgeservices.com",
+      "pos": [1280, 380],
+      "size": [180, 68]
     },
     {
       "id": "gsv",
@@ -104,32 +161,16 @@
       "label": "GSV provider",
       "sublabel": "本地克隆 · 流式 PCM",
       "tag": "provider=gsv",
-      "pos": [930, 460],
+      "pos": [1020, 540],
       "size": [170, 68],
       "sources": [{ "path": "src/providers/gsv.ts", "line": 8, "end_line": 60, "label": "本地提供方" }]
-    },
-    {
-      "id": "dsapi",
-      "type": "cloud",
-      "label": "DeepSeek TTS API",
-      "sublabel": "api.deepseek.com/v1/tools/tts",
-      "pos": [1190, 180],
-      "size": [180, 68]
-    },
-    {
-      "id": "edgeapi",
-      "type": "cloud",
-      "label": "微软 Edge 合成",
-      "sublabel": "api.msedgeservices.com",
-      "pos": [1190, 320],
-      "size": [180, 68]
     },
     {
       "id": "engine",
       "type": "backend",
       "label": "GSV-TTS-Lite 引擎",
       "sublabel": "FastAPI :9880 · /tts/stream",
-      "pos": [1190, 460],
+      "pos": [1280, 540],
       "size": [180, 68],
       "sources": [{ "path": "scripts/dsh_stream_api.py", "line": 230, "end_line": 260, "label": "流式合成接口" }]
     }
@@ -138,7 +179,7 @@
     {
       "kind": "region",
       "label": "DSH 应用（DeepSeek Harness）",
-      "wraps": ["agent", "client", "web", "settings", "store", "tts", "creds", "deepseek", "edge", "gsv"]
+      "wraps": ["client", "web", "settings", "lexicon", "store", "tts", "catalog", "doctor", "creds", "deepseek", "edge", "gsv"]
     },
     {
       "kind": "region",
@@ -162,46 +203,50 @@
     { "id": "deepseek-dsapi", "from": "deepseek", "to": "dsapi", "label": "官方 TTS", "variant": "emphasis" },
     { "id": "edge-edgeapi", "from": "edge", "to": "edgeapi", "label": "WSS" },
     { "id": "gsv-engine", "from": "gsv", "to": "engine", "label": "SSE", "variant": "emphasis" },
-    { "id": "tts-store", "from": "tts", "to": "store", "label": "WAV 落盘" },
+    { "id": "tts-store", "from": "tts", "to": "store", "label": "落盘" },
     { "id": "store-web", "from": "store", "to": "web", "label": "短链接", "variant": "dashed" },
     { "id": "client-settings", "from": "client", "to": "settings", "label": "保存配置", "variant": "dashed" },
+    { "id": "tts-lexicon", "from": "tts", "to": "lexicon", "label": "读词典" },
+    { "id": "catalog-client", "from": "catalog", "to": "client", "label": "目录", "variant": "dashed" },
+    { "id": "agent-doctor", "from": "agent", "to": "doctor", "label": "tts_doctor", "variant": "dashed" },
+    { "id": "doctor-tts", "from": "doctor", "to": "tts", "label": "诊断", "variant": "dashed" },
     { "id": "agent-tts", "from": "agent", "to": "tts", "label": "tts_speak", "variant": "dashed" }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "三种模式（provider 三选一）",
+      "title": "目录驱动（provider 描述符）",
       "items": [
-        "GSV：本地克隆、完全离线，由本机 Python 引擎合成",
-        "Edge：微软网络音色，免费、免安装，返回 MP3",
-        "DeepSeek：官方 TTS，海星 / 暗潮两个音色，按字符计费"
+        "能力（是否需要引擎/凭据、是否计费、音色来源）由 src/catalog.ts 定义，客户端 Tab 与字段据此渲染",
+        "默认音色与合法音色规则（voiceIdPattern）同属目录，迁移守卫也读它",
+        "新增 provider = 加一条描述符 + 一个实现，不再改 UI 分支"
       ]
     },
     {
       "dot": "emerald",
-      "title": "凭据复用（官方语音）",
+      "title": "发音词典（借鉴 VoiceStudio）",
       "items": [
-        "经 Harness credentials 服务解析 DEEPSEEK_API_KEY，与模型鉴权同一份凭据",
-        "插件配置不落 Key；凭据服务不可用时回退同名环境变量",
-        "健康探活走免费 GET /models，不做试合成、不产生费用"
+        "支持全局与 [edge]/[deepseek]/[gsv] 分节；更具体的作用域覆盖全局",
+        "字面匹配、长词优先、同长度后写优先、单次替换不链式",
+        "tts_lexicon_preview 与 /lexicon/preview 只做替换预览，不合成、不产生费用"
       ]
     },
     {
       "dot": "violet",
+      "title": "可解释失败（tts_doctor）",
+      "items": [
+        "deep=true 调用免费 GET /models 验证凭据，不产生合成费用",
+        "本地模式检查 Python / gsv-tts-lite / 仓库，并附引擎日志末尾 12 行",
+        "最近失败写入临时文件，插件重载后仍可诊断；报告不含任何密钥"
+      ]
+    },
+    {
+      "dot": "amber",
       "title": "首音与音频投递",
       "items": [
         "朗读按 30 / 150 字分段，逐段落盘后立刻播放，首音约 1 秒级",
         "整段播放 / 下载由 /speak/full 提供：官方模式边收边写文件",
         "音频经同源 /dsh-gsv-tts/audio 提供，支持 Range 拖动"
-      ]
-    },
-    {
-      "dot": "amber",
-      "title": "工具与引擎",
-      "items": [
-        "tts_speak / tts_list_voices / tts_health_check / tts_setup_engine 全程宿主内直连",
-        "引擎由 engine-manager 启停，模型加载约 15~90 秒",
-        "切换模式即时生效，不等网络；音色列表首次拉取后缓存"
       ]
     }
   ]
