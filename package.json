@@ -1,7 +1,7 @@
 {
   "name": "dsh-gsv-tts",
-  "version": "5.4.0",
-  "description": "DSH plugin for local GSV-TTS-Lite voice cloning + Edge cloud simple mode: voice presets, auto-read, engine setup assistant, read-aloud button, settings panel",
+  "version": "5.5.0",
+  "description": "DSH plugin for read-aloud: local GSV-TTS-Lite cloning, Edge cloud voices, DeepSeek official TTS, lexicon, auto-read and settings panel",
   "keywords": [
     "dsh-plugin",
     "tts",

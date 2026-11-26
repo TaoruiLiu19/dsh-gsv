@@ -2,7 +2,7 @@
 
 本文件记录 dsh-gsv-tts 的所有版本更新。格式基于 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [未发布]
+## [5.5.0] - 2026-11-26
 
 - 播放器新增倍速、音量、逐句跟读与 SRT 导出。DSH 原生录音和转写会暂停自动取队列并停止播放。
 - 支持 OpenAI-compatible TTS 服务，复用 PCM/WAV 解码，并开放 GSV 合成语速、后端风格指令和模型 SHA-256 清单。
