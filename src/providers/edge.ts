@@ -1,11 +1,12 @@
 import { listVoices as libListVoices } from 'edge-tts-universal';
 import { EdgeTTS } from 'node-edge-tts';
-import type { ProviderChunk, ProviderHealth, TTSProvider, VoiceInfo } from '../types.js';
+import type { ProviderChunk, ProviderHealth, SpeechCue, TTSProvider, VoiceInfo } from '../types.js';
 import { defaultVoiceFor, isValidVoiceId } from '../catalog.js';
 
 interface EdgeStreamMessage {
   type?: string;
   data?: Buffer;
+  cue?: SpeechCue;
 }
 
 interface EdgeCommunicateLike {
@@ -13,7 +14,7 @@ interface EdgeCommunicateLike {
 }
 
 interface EdgeCommunicateCtor {
-  new (text: string, options?: { voice?: string }): EdgeCommunicateLike;
+  new (text: string, options?: { voice?: string; signal?: AbortSignal }): EdgeCommunicateLike;
 }
 
 /** Edge 合法音色 id 形如 zh-CN-XiaoxiaoNeural / zh-CN-liaoning-XiaobeiNeural。 */
@@ -35,16 +36,33 @@ export interface EdgeLib {
  * 合成改走 node-edge-tts（新端点 + 握手失败会 reject），音色列表仍用原库。
  */
 class NodeEdgeCommunicate implements EdgeCommunicateLike {
-  constructor(private text: string, private options?: { voice?: string }) {}
+  constructor(private text: string, private options?: { voice?: string; signal?: AbortSignal }) {}
 
   async *stream(): AsyncGenerator<EdgeStreamMessage, void, unknown> {
-    const tts = new EdgeTTS({
+    const signal = this.options?.signal;
+    const tts = new class extends EdgeTTS {
+      override async _connectWebSocket() {
+        signal?.throwIfAborted();
+        const socket = await super._connectWebSocket();
+        const abort = () => socket.terminate();
+        if (signal?.aborted) {
+          abort();
+          signal.throwIfAborted();
+        }
+        signal?.addEventListener('abort', abort, { once: true });
+        socket.once('close', () => signal?.removeEventListener('abort', abort));
+        return socket;
+      }
+    }({
       voice: this.options?.voice ?? 'zh-CN-XiaoxiaoNeural',
       timeout: 30000,
+      saveSubtitles: true,
     });
     for await (const chunk of tts.streamAudio(this.text)) {
       if (Buffer.isBuffer(chunk) && chunk.length > 0) {
         yield { type: 'audio', data: chunk };
+      } else if (!Buffer.isBuffer(chunk) && chunk.end > chunk.start) {
+        yield { type: 'boundary', cue: { text: chunk.part, start: chunk.start / 1000, end: chunk.end / 1000 } };
       }
     }
   }
@@ -156,7 +174,7 @@ export class EdgeProvider implements TTSProvider {
     // 兼容旧配置：provider=edge 但 defaultVoice 还是本地音色名（如「拉菲」）。
     // 非法 id 会让 Edge 以 1007 关闭，这里回退到默认可用的晓晓。
     const voiceId = isValidVoiceId('edge', voice) ? voice : (defaultVoiceFor('edge') || EDGE_FALLBACK_VOICE);
-    const c = new this.lib.Communicate(text, { voice: voiceId });
+    const c = new this.lib.Communicate(text, { voice: voiceId, signal });
     const it = c.stream();
     try {
       while (true) {
@@ -165,6 +183,8 @@ export class EdgeProvider implements TTSProvider {
         if (done) break;
         if (value.type === 'audio' && value.data && value.data.length > 0) {
           yield { mime: 'audio/mpeg', data: value.data };
+        } else if (value.cue) {
+          yield { mime: 'audio/meta', data: new Uint8Array(0), cues: [value.cue] };
         }
       }
     } finally {

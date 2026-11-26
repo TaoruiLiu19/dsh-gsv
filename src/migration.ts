@@ -1,4 +1,5 @@
 import type { ProviderKind, VoicePreset } from './types.js';
+import { resolveProviderKind } from './config.js';
 
 /**
  * provider 迁移守卫（5.0.0 起）：配置里没有显式 provider 时落定一次并写回。
@@ -7,6 +8,5 @@ import type { ProviderKind, VoicePreset } from './types.js';
  * - 已显式设置（gsv/edge/deepseek）→ 沿用，不再改写
  */
 export function resolveProvider(stored: unknown, voices: readonly VoicePreset[]): ProviderKind {
-  if (stored === 'edge' || stored === 'gsv' || stored === 'deepseek') return stored;
-  return voices.length > 0 ? 'gsv' : 'edge';
+  return resolveProviderKind(stored, voices);
 }

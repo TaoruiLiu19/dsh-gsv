@@ -1,397 +1,527 @@
-import { closeSync, openSync, unlinkSync, writeSync } from 'fs';
-import { randomUUID } from 'crypto';
-import { join } from 'path';
+import { closeSync, createReadStream, openSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 import { TextCleaner, MAX_TEXT_LENGTH, MAX_SEGMENTED_TEXT_LENGTH, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS } from './text-cleaner.js';
 import { splitIntoSegments } from './segmenter.js';
 import { float32ToInt16, wavHeader } from './wav-stream.js';
 import { GsvProvider } from './providers/gsv.js';
 import { EdgeProvider } from './providers/edge.js';
-import { DeepseekProvider, buildWav16 } from './providers/deepseek.js';
-import { defaultVoiceFor } from './catalog.js';
+import { DeepseekProvider, parseWav } from './providers/deepseek.js';
+import { CustomSpeechProvider } from './providers/custom.js';
+import type { SpeechStats } from './speech-stats.js';
+import { SharedWork, waitWithSignal } from './shared-work.js';
+import { defaultVoiceFor, isValidVoiceId } from './catalog.js';
 import { applyLexicon, parseLexicon } from './lexicon.js';
 import type { CredentialFacts } from './doctor.js';
-import type { AudioChunk, AudioStore } from './audio-store.js';
+import { MAX_AUDIO_BYTES, type AudioStore } from './audio-store.js';
 import type {
-  Config,
-  ProviderHealth,
-  ProviderKind,
-  SynthesizeResult,
-  SynthesizeSegmentsResult,
-  TTSAudioSegment,
-  TTSProvider,
-  VoiceInfo,
-  VoicePreset,
+  Config, ProviderChunk, ProviderHealth, ProviderKind, SynthesizeResult,
+  SpeechCue, SynthesizeSegmentsResult, TTSProvider, VoiceInfo, VoicePreset,
 } from './types.js';
 import type { VoiceManager } from './voice-manager.js';
 
-let fileCounter = 0;
+export interface SpeechJob {
+  config: Config;
+  text: string;
+  voice: VoicePreset | string;
+  automatic?: boolean;
+  followText?: boolean;
+}
 
+interface CompleteAudio {
+  audioUrl: string;
+  duration: number;
+  bytes: number;
+  parts: number;
+}
+
+type PcmSource = (signal: AbortSignal) => AsyncIterable<{ sampleRate: number; data: Buffer }>;
+
+interface WavProgress {
+  file: string;
+  sampleRate: number;
+  bytes: number;
+  change: ReturnType<typeof changeSignal>;
+  state: 'running' | 'complete' | 'failed';
+  error?: unknown;
+}
+
+function changeSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function notify(progress: WavProgress): void {
+  const previous = progress.change;
+  progress.change = changeSignal();
+  previous.resolve();
+}
 
 export class TTSService {
-  private voiceManager: VoiceManager | undefined;
-  private gsv: GsvProvider;
-  private edge: EdgeProvider;
-  private deepseek: DeepseekProvider;
-  private onFailure?: (e: unknown) => void;
+  private readonly gsv: GsvProvider;
+  private readonly edge: EdgeProvider;
+  private readonly deepseek: DeepseekProvider;
+  private readonly custom: CustomSpeechProvider;
+  private readonly saved = new Map<string, CompleteAudio & { cues?: SpeechCue[] }>();
+  private readonly partsInFlight = new Map<string, SharedWork<SynthesizeResult>>();
+  private readonly mp3InFlight = new Map<string, SharedWork<CompleteAudio>>();
+  private readonly wavInFlight = new Map<string, { work: SharedWork<CompleteAudio>; progress: WavProgress }>();
 
-  /**
-   * @param getConfig 读取当前生效配置（DSH 0.2+ 设置为 volatile 就地更新，
-   *   因此每次调用都要重新读取，不能缓存配置快照）。
-   */
   constructor(
-    private getConfig: () => Config,
-    private audioStore: AudioStore,
-    opts?: {
+    private readonly getConfig: () => Config,
+    private readonly audioStore: AudioStore,
+    private readonly opts: {
       voiceManager?: VoiceManager;
       gsv?: GsvProvider;
       edge?: EdgeProvider;
       deepseek?: DeepseekProvider;
-      /** 失败回调：路由/工具层据此记录 lastFailure，供 tts_doctor 使用 */
-      onFailure?: (e: unknown) => void;
-    },
+      custom?: CustomSpeechProvider;
+      stats?: SpeechStats;
+      onFailure?: (error: unknown) => void;
+    } = {},
   ) {
-    this.voiceManager = opts?.voiceManager;
-    this.onFailure = opts?.onFailure;
-    this.gsv = opts?.gsv ?? new GsvProvider({ getConfig: () => this.getConfig(), voiceManager: opts?.voiceManager });
-    this.edge = opts?.edge ?? new EdgeProvider();
-    this.deepseek = opts?.deepseek ?? new DeepseekProvider({ getConfig: () => this.getConfig() });
+    this.gsv = opts.gsv ?? new GsvProvider({ getConfig, voiceManager: opts.voiceManager });
+    this.edge = opts.edge ?? new EdgeProvider();
+    this.deepseek = opts.deepseek ?? new DeepseekProvider({ getConfig });
+    this.custom = opts.custom ?? new CustomSpeechProvider(getConfig);
   }
 
-  /**
-   * 统一入口：文本清洗 + 发音词典。
-   * 所有合成路径（单段 / 分段 / 流式 / 整段）都走这里，词典才不会只对某一条路径生效。
-   */
-  private prepareText(text: string, provider?: ProviderKind): string {
-    const cleaned = TextCleaner.clean(text);
-    const entries = parseLexicon(this.getConfig().lexicon);
-    if (entries.length === 0) return cleaned;
-    return applyLexicon(cleaned, entries, provider ?? this.getConfig().provider);
-  }
-  /** 统一失败上报：不吞异常，只旁路记录。 */
-  private reportFailure(e: unknown): void {
-    try {
-      this.onFailure?.(e);
-    } catch {
-      // 记录失败不影响主错误
-    }
-  }
-
-  private provider(kind?: ProviderKind): TTSProvider {
-    const resolved = kind ?? this.getConfig().provider ?? 'gsv';
-    if (resolved === 'edge') return this.edge;
-    if (resolved === 'deepseek') return this.deepseek;
+  private provider(kind = this.getConfig().provider): TTSProvider {
+    if (kind === 'edge') return this.edge;
+    if (kind === 'deepseek') return this.deepseek;
+    if (kind === 'custom') return this.custom;
     return this.gsv;
   }
 
-  /** 当前提供方音色列表（gsv = 本地预设；edge = 精选微软声音）。 */
   listVoices(kind?: ProviderKind): Promise<VoiceInfo[]> {
     return this.provider(kind).listVoices();
   }
 
-  /** 当前提供方健康（edge = 试合成退避；gsv = 引擎状态）。 */
   health(kind?: ProviderKind): Promise<ProviderHealth> {
     return this.provider(kind).health();
   }
 
-  /** 显式探活（deep 模式）：云端走免费 /models；本地引擎不看凭据，直接视为通过。 */
   async checkCredential(kind?: ProviderKind): Promise<{ ok: boolean; message?: string }> {
-    const p = this.provider(kind);
-    if (p.kind === 'deepseek') return this.deepseek.checkCredential();
-    return { ok: true };
+    return this.provider(kind).kind === 'deepseek' ? this.deepseek.checkCredential() : { ok: true };
   }
-  /** 当前 provider 的凭据事实（只描述来源，不返回 Key）。 */
+
   async describeCredential(kind?: ProviderKind): Promise<CredentialFacts> {
-    const p = this.provider(kind);
-    if (p.kind === 'deepseek') return this.deepseek.describeCredential();
-    return { configured: false, source: 'none' };
+    return this.provider(kind).kind === 'deepseek'
+      ? this.deepseek.describeCredential()
+      : { configured: false, source: 'none' };
   }
-  /** 预热指定音色（缓存 speaker/prompt + 短推理），失败静默。 */
+
   warmupVoice(preset: VoicePreset): Promise<boolean> {
     return this.gsv.warmup(preset);
   }
 
-  /** 单次合成整段（tts_speak / 试听路径）。voice 可为预设对象（gsv）或音色 id（edge）。 */
-  async synthesize(
+  private prepareText(text: string, config: Config, limit: number): string {
+    const cleaned = applyLexicon(TextCleaner.clean(text), parseLexicon(config.lexicon ?? ''), config.provider);
+    if (!cleaned.trim()) throw new Error('文本清洗后为空，无法合成');
+    if (cleaned.length > limit) throw new Error(`文本过长（${cleaned.length} 字符，上限 ${limit}），请分段朗读`);
+    return cleaned;
+  }
+
+  prepareJob(
     text: string,
     voice?: VoicePreset | string,
-    signal?: AbortSignal,
     kind?: ProviderKind,
-  ): Promise<SynthesizeResult> {
-    try {
-    const cleanText = this.prepareText(text, kind);
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (cleanText.length > MAX_TEXT_LENGTH) {
-      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_TEXT_LENGTH}），请分段朗读`);
-    }
-    const p = this.provider(kind);
-    if (p.kind === 'gsv') {
-      const preset = typeof voice === 'string' ? this.voiceManager?.get(voice) : voice;
+    limit = MAX_SEGMENTED_TEXT_LENGTH,
+    snapshot = this.getConfig(),
+  ): SpeechJob {
+    const config = { ...snapshot };
+    config.provider = kind ?? config.provider ?? 'gsv';
+    if (kind && kind !== snapshot.provider) config.defaultVoice = config.voiceByProvider?.[kind] ?? '';
+    const cleaned = this.prepareText(text, config, limit);
+    if (config.provider === 'gsv') {
+      const voiceName = typeof voice === 'string' ? voice : config.defaultVoice;
+      const preset = typeof voice === 'object' ? voice
+        : config.voices?.find(entry => entry.name === voiceName)
+          ?? config.voices?.find(entry => entry.name === config.defaultVoice)
+          ?? config.voices?.[0];
       if (!preset) throw new Error('未指定音色预设');
-      return await this.synthesizeGsv(cleanText, preset, signal);
+      return { config, text: cleaned, voice: { ...preset } };
     }
-    if (typeof voice === 'object' && voice !== null) {
-      throw new Error(
-        p.kind === 'deepseek'
-          ? 'DeepSeek 官方语音模式不支持本地音色预设，请在音色下拉选择官方音色（海星 / 暗潮）'
-          : 'Edge（云端简单）模式不支持本地音色预设，请在音色下拉选择云端声音',
-      );
+    if (typeof voice === 'object') {
+      const mode = config.provider === 'deepseek' ? 'DeepSeek 官方语音模式'
+        : config.provider === 'custom' ? '自定义语音' : 'Edge（云端简单）模式';
+      throw new Error(`${mode}不支持本地音色预设`);
     }
-    if (p.kind === 'deepseek') {
-      return await this.synthesizeDeepseek(cleanText, typeof voice === 'string' ? voice : undefined, signal);
-    }
-    return await this.synthesizeEdge(cleanText, typeof voice === 'string' ? voice : undefined, signal);
-    } catch (e) {
-      this.reportFailure(e);
-      throw e;
+    const requested = voice || config.defaultVoice;
+    const id = isValidVoiceId(config.provider, requested)
+      ? requested.trim()
+      : defaultVoiceFor(config.provider) || 'zh-CN-XiaoxiaoNeural';
+    return { config, text: cleaned, voice: id };
+  }
+
+  private report(error: unknown, signal?: AbortSignal): void {
+    if (signal?.aborted) return;
+    try { this.opts.onFailure?.(error); } catch { /* 诊断不应覆盖合成错误 */ }
+  }
+
+  async synthesize(text: string, voice?: VoicePreset | string, signal?: AbortSignal, kind?: ProviderKind): Promise<SynthesizeResult> {
+    try {
+      const job = this.prepareJob(text, voice, kind, MAX_TEXT_LENGTH);
+      return await this.synthesizePart(job, job.text, signal);
+    } catch (error) {
+      this.report(error, signal);
+      throw error;
     }
   }
 
-  /** 清洗并切分朗读文本：首段更短，后续段按 SEGMENT_MAX_CHARS 打包。 */
   planSegments(text: string): string[] {
-    const cleanText = this.prepareText(text);
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
-      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
-    }
-    return splitIntoSegments(cleanText, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS);
+    const config = this.getConfig();
+    return this.split(this.prepareText(text, config, MAX_SEGMENTED_TEXT_LENGTH));
   }
 
-  /** 渐进分段合成（朗读按钮 / 自动朗读路径）：按 provider 逐段合成，段间 0 静音。 */
+  private split(text: string, followText = false): string[] {
+    if (followText) return Array.from(new Intl.Segmenter('zh', { granularity: 'sentence' }).segment(text))
+      .flatMap(({ segment }) => splitIntoSegments(segment.trim(), SEGMENT_MAX_CHARS, 0));
+    return splitIntoSegments(text, SEGMENT_MAX_CHARS, FIRST_SEGMENT_MAX_CHARS);
+  }
+
   async synthesizeSegments(text: string, voice?: VoicePreset | string, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
-    const parts = this.planSegments(text);
-    const segments: TTSAudioSegment[] = [];
+    return this.synthesizeJobSegments(this.prepareJob(text, voice), signal);
+  }
+
+  async synthesizeJobSegments(job: SpeechJob, signal?: AbortSignal): Promise<SynthesizeSegmentsResult> {
+    const segments: SynthesizeSegmentsResult['segments'] = [];
     let totalLen = 0;
-    let error: string | undefined;
-    for (let i = 0; i < parts.length; i++) {
+    try {
+      for await (const segment of this.streamSegments(job, signal)) {
+        segments.push({ url: segment.url, duration: segment.duration, text: segment.text, cues: segment.cues });
+        totalLen += segment.duration;
+      }
+    } catch (error) {
+      signal?.throwIfAborted();
+      if (!segments.length) throw error;
+      return { segments, totalLen, error: (error as Error).message };
+    }
+    return { segments, totalLen };
+  }
+
+  async *synthesizeSegmentsStream(text: string, voice?: VoicePreset | string, signal?: AbortSignal) {
+    yield* this.streamSegments(this.prepareJob(text, voice), signal);
+  }
+
+  async *streamSegments(job: SpeechJob, signal?: AbortSignal) {
+    const parts = this.split(job.text, job.followText);
+    for (const [index, text] of parts.entries()) {
       try {
-        const r = await this.synthesize(parts[i], voice, signal);
-        segments.push({ url: r.audioUrl, duration: r.audioLen });
-        totalLen += r.audioLen;
-      } catch (e) {
-        if (signal?.aborted) throw e; // 取消/超时：整次失败，丢弃半成品
-        error = `第 ${i + 1}/${parts.length} 段合成失败：${String((e as Error)?.message ?? e)}`;
-        break;
+        const part = await this.synthesizePart(job, text, signal);
+        const duration = this.saved.get(part.filename)?.duration ?? part.audioLen;
+        yield { index, total: parts.length, url: part.audioUrl, duration, text, cues: part.cues };
+      } catch (error) {
+        this.report(error, signal);
+        throw new Error(`第 ${index + 1}/${parts.length} 段合成失败：${(error as Error).message}`, { cause: error });
       }
     }
-    return { segments, totalLen, error };
   }
 
-  /**
-   * 流式分段合成：每完成一段就 yield，调用方可以立刻把 URL 交给浏览器播放，
-   * 无需等整条回复全部分段合成完（首音时间从"全部段落"降到"首段"）。
-   */
-  async *synthesizeSegmentsStream(
-    text: string,
-    voice?: VoicePreset | string,
-    signal?: AbortSignal,
-  ): AsyncGenerator<{ index: number; total: number; url: string; duration: number }> {
-    const parts = this.planSegments(text);
-    for (let i = 0; i < parts.length; i++) {
-      const r = await this.synthesize(parts[i], voice, signal);
-      yield { index: i, total: parts.length, url: r.audioUrl, duration: r.audioLen };
+  private async synthesizePart(job: SpeechJob, text: string, signal?: AbortSignal): Promise<SynthesizeResult> {
+    signal?.throwIfAborted();
+    const { config, voice } = job;
+    const name = this.cacheName(job, text, config.provider === 'gsv' ? 'part' : 'speech');
+    const cached = this.find(name, job.config.provider);
+    if (cached) return { audioUrl: cached.audioUrl, filename: name,
+      audioLen: config.provider === 'edge' ? 0 : cached.duration, cues: cached.cues };
+    if (config.provider !== 'edge' && config.provider !== 'gsv') {
+      const saved = await this.wavFlight(name, active => this.pcm({ ...job, text }, active)).work.wait(signal);
+      return { audioUrl: saved.audioUrl, filename: name, audioLen: saved.duration };
     }
+    return this.shared(this.partsInFlight, name, active => this.renderPart(job, text, name, active)).wait(signal);
   }
 
-  /**
-   * 流式 PCM：把整段文本交给引擎一次合成，逐块产出 float32 PCM。
-   * 用于"边合成边播放"的 WAV 流（首音≈引擎首块，不再等全部分段）。
-   * 不设超时：由调用方在客户端断开时 abort。
-   */
-  async *streamPcm(
-    text: string,
-    voice: VoicePreset,
-    signal?: AbortSignal,
-  ): AsyncGenerator<{
-    sampleRate: number; data: Buffer
-  }> {
-    try {
-    const cleanText = this.prepareText(text);
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
-      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
-    }
-    for await (const chunk of this.gsv.streamWithPreset(cleanText, voice, signal, { timeoutMs: 0 })) {
-      if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate && chunk.data.length > 0) {
-        yield { sampleRate: chunk.sampleRate, data: Buffer.from(chunk.data) };
-      }
-    }
-    } catch (e) {
-      this.reportFailure(e);
-      throw e;
-    }
+  private shared<T>(
+    pool: Map<string, SharedWork<T>>, name: string, run: (active: AbortSignal) => Promise<T>,
+  ): SharedWork<T> {
+    const existing = pool.get(name);
+    if (existing && !existing.signal.aborted) return existing;
+    const work = new SharedWork(run);
+    pool.set(name, work);
+    const forget = () => { if (pool.get(name) === work) pool.delete(name); };
+    void work.result.then(forget, forget);
+    return work;
   }
 
-  /**
-   * 整段 WAV：把流式 PCM 直接写成一个完整 WAV 文件（不设超时、不占内存）。
-   * 只用于"整段播放 / 下载"这类需要 seek 的可选路径；默认朗读仍走流式 HTTP。
-   */
-  async synthesizeFullWav(
-    text: string,
-    voice: VoicePreset,
-    signal?: AbortSignal,
-  ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
-    const cleanText = this.prepareText(text);
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
-      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
+  private async renderPart(job: SpeechJob, text: string, name: string, signal: AbortSignal): Promise<SynthesizeResult> {
+    const { config, voice } = job;
+    if (config.provider === 'edge') {
+      const operation = AbortSignal.timeout(Math.ceil(config.timeout));
+      const combined = signal ? AbortSignal.any([signal, operation]) : operation;
+      const { mp3, cues } = await this.edgeAudio(text, String(voice), combined);
+      signal.throwIfAborted();
+      const saved = this.audioStore.saveRaw(name, mp3);
+      this.remember(name, { audioUrl: saved.url, bytes: mp3.length, duration: mp3.length * 8 / 48000, parts: 1, cues });
+      return { audioUrl: saved.url, filename: saved.name, audioLen: 0, cues };
     }
-    const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.wav`;
-    const file = join(this.audioStore.directory, name);
-    let sampleRate = 32000;
-    let pcmBytes = 0;
-    const fd = openSync(file, 'w');
-    try {
-      writeSync(fd, wavHeader(sampleRate));
-      for await (const chunk of this.streamPcm(cleanText, voice, signal)) {
-        sampleRate = chunk.sampleRate || sampleRate;
-        const pcm = float32ToInt16(chunk.data);
-        if (pcm.length === 0) continue;
-        writeSync(fd, pcm);
-        pcmBytes += pcm.length;
-      }
-      if (pcmBytes === 0) throw new Error('未收到任何音频数据');
-      const header = wavHeader(sampleRate);
-      header.writeUInt32LE(36 + pcmBytes, 4);
-      header.writeUInt32LE(pcmBytes, 40);
-      writeSync(fd, header, 0, header.length, 0);
-    } catch (e) {
-      this.reportFailure(e);
-      try { closeSync(fd); } catch { /* 忽略 */ }
-      try { unlinkSync(file); } catch { /* 忽略 */ }
-      throw e;
-    }
-    closeSync(fd);
-    return {
-      audioUrl: this.audioStore.urlFor(name),
-      duration: pcmBytes / (sampleRate * 2),
-      bytes: pcmBytes + 44,
-      parts: 1,
-    };
-  }
-
-  private async synthesizeGsv(cleanText: string, preset: VoicePreset, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const chunks: AudioChunk[] = [];
-    let totalDuration = 0;
-    for await (const chunk of this.gsv.streamWithPreset(cleanText, preset, signal)) {
-      if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate) {
+    const chunks = [];
+    const cues: SpeechCue[] = [];
+    let duration = 0;
+    for await (const chunk of this.gsv.streamWithPreset(text, voice as VoicePreset, signal, { config, captions: true })) {
+      if (chunk.mime.startsWith('audio/pcm') && chunk.sampleRate && chunk.data.length) {
         chunks.push({ base64: Buffer.from(chunk.data).toString('base64'), sampleRate: chunk.sampleRate });
       }
-      if (chunk.totalDuration) totalDuration = chunk.totalDuration;
+      if (chunk.totalDuration) duration = chunk.totalDuration;
+      if (chunk.cues) cues.push(...chunk.cues);
     }
-    if (chunks.length === 0) throw new Error('未收到任何音频数据');
-    const saved = this.audioStore.save(`tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`, chunks);
-    return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
+    signal.throwIfAborted();
+    if (!chunks.length) throw new Error('未收到任何音频数据');
+    const saved = this.audioStore.save(name, chunks);
+    this.remember(name, { audioUrl: saved.url, bytes: 0, duration, parts: 1, cues });
+    return { audioUrl: saved.url, filename: saved.name, audioLen: duration, cues };
   }
 
-  /**
-   * 官方语音整段合成：/speak/full 用。
-   * 跳过单次 6000 字上限（提供方按 2000 字切分），但保留分段朗读的 30000 字总量上限；
-   * 音频边收边写文件，30 分钟量级的音频也不会把 PCM 全堆在内存里。
-   */
-  async synthesizeLongWav(
-    text: string,
-    voice?: string,
-    signal?: AbortSignal,
-  ): Promise<{ audioUrl: string; duration: number; bytes: number; parts: number }> {
-    const cleanText = this.prepareText(text);
-    if (!cleanText) throw new Error('文本清洗后为空，无法合成');
-    if (cleanText.length > MAX_SEGMENTED_TEXT_LENGTH) {
-      throw new Error(`文本过长（${cleanText.length} 字符，上限 ${MAX_SEGMENTED_TEXT_LENGTH}），请分段朗读`);
-    }
-    const id = voice || this.getConfig().defaultVoice || defaultVoiceFor('deepseek');
-    const name = `reply_${Date.now()}_${randomUUID().slice(0, 8)}.wav`;
-    const file = join(this.audioStore.directory, name);
-    let sampleRate = 24000;
-    let pcmBytes = 0;
-    let duration = 0;
-    const fd = openSync(file, 'w');
-    try {
-      writeSync(fd, wavHeader(sampleRate));
-      for await (const chunk of this.deepseek.stream(cleanText, id, signal)) {
-        if (chunk.mime === 'audio/pcm-s16' && chunk.sampleRate) {
-          sampleRate = chunk.sampleRate;
-          if (chunk.data.length > 0) {
-            writeSync(fd, chunk.data);
-            pcmBytes += chunk.data.length;
-          }
-        }
-        if (chunk.totalDuration) duration = chunk.totalDuration;
-      }
-      if (pcmBytes === 0) throw new Error('未收到任何音频数据');
-      // 回填 RIFF/data 长度（wavHeader 写的是流式 0xFFFFFFFF）
-      const header = wavHeader(sampleRate);
-      header.writeUInt32LE(36 + pcmBytes, 4);
-      header.writeUInt32LE(pcmBytes, 40);
-      writeSync(fd, header, 0, header.length, 0);
-    } catch (e) {
-      try { closeSync(fd); } catch { /* 忽略 */ }
-      try { unlinkSync(file); } catch { /* 忽略 */ }
-      throw e;
-    }
-    closeSync(fd);
-    if (!duration) duration = pcmBytes / (sampleRate * 2);
-    return { audioUrl: this.audioStore.urlFor(name), duration, bytes: pcmBytes + 44, parts: 1 };
-  }
-
-  /** 官方语音：逐块收 PCM 后装一个 16-bit WAV 落盘；时长由提供方按采样参数算好（0 表示未知）。 */
-  private async synthesizeDeepseek(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const id = voiceId || this.getConfig().defaultVoice || defaultVoiceFor('deepseek');
-    const pcm: Buffer[] = [];
-    let sampleRate = 24000;
-    let totalDuration = 0;
-    for await (const chunk of this.deepseek.stream(cleanText, id, signal)) {
-      if (chunk.mime === 'audio/pcm-s16' && chunk.sampleRate) {
-        sampleRate = chunk.sampleRate;
-        if (chunk.data.length > 0) pcm.push(Buffer.from(chunk.data));
-      }
-      if (chunk.totalDuration) totalDuration = chunk.totalDuration;
-    }
-    if (pcm.length === 0) throw new Error('DeepSeek 未返回音频数据');
-    const saved = this.audioStore.saveRaw(
-      `tts_${Date.now()}_${(fileCounter++).toString(36)}.wav`,
-      buildWav16(Buffer.concat(pcm), sampleRate, 1),
-    );
-    return { audioUrl: saved.url, audioLen: totalDuration, filename: saved.name };
-  }
-
-  private async synthesizeEdge(cleanText: string, voiceId?: string, signal?: AbortSignal): Promise<SynthesizeResult> {
-    const edgeFallback = defaultVoiceFor('edge') || 'zh-CN-XiaoxiaoNeural';
-    const id = voiceId || this.getConfig().defaultVoice || edgeFallback;
-    const attempt = async (voice: string): Promise<Buffer[]> => {
-      const parts: Buffer[] = [];
-      for await (const chunk of this.edge.stream(cleanText, voice, signal)) {
-        if (chunk.mime === 'audio/mpeg' && chunk.data.length > 0) {
-          parts.push(Buffer.from(chunk.data));
-        }
-      }
-      return parts;
+  private cacheName(job: SpeechJob, text: string, mode: string): string {
+    const c = job.config;
+    const fingerprint = (path: string) => {
+      if (!path) return '';
+      try { const stat = statSync(path); return [path, stat.size, stat.mtimeMs]; } catch { return path; }
     };
-    let parts: Buffer[] = [];
+    const provider = c.provider === 'gsv'
+      ? [c.apiUrl, c.gsvSpeed, fingerprint(c.gsvModelManifest), typeof job.voice === 'object'
+        ? [fingerprint(job.voice.speakerAudioPath), fingerprint(job.voice.promptAudioPath)] : []]
+      : c.provider === 'custom'
+        ? [c.customBaseUrl, c.customModel, c.customKeyRef, c.customInstructions, c.customFormat]
+        : c.provider === 'deepseek' ? [process.env.DEEPSEEK_BASE_URL, c.deepseekApiKeyEnv, c.deepseekApiKey] : [];
+    const digest = createHash('sha256').update(JSON.stringify([1, mode, text, c.provider, job.voice, provider])).digest('hex');
+    return `speech_${digest}.${c.provider === 'edge' ? 'mp3' : 'wav'}`;
+  }
+
+  private find(name: string, provider: ProviderKind) {
+    const entry = this.saved.get(name);
+    if (entry && this.audioStore.has(name)) {
+      this.opts.stats?.record(provider, 'cacheHit');
+      return entry;
+    }
+    this.saved.delete(name);
+    return undefined;
+  }
+
+  private remember(name: string, result: CompleteAudio & { cues?: SpeechCue[] }): void {
+    this.saved.set(name, result);
+    if (this.saved.size > 400) this.saved.delete(this.saved.keys().next().value!);
+  }
+
+  cachedComplete(job: SpeechJob) {
+    return this.find(this.cacheName(job, job.text, this.completeMode(job)), job.config.provider);
+  }
+
+  hasWavInFlight(job: SpeechJob): boolean {
+    const flight = this.wavInFlight.get(this.cacheName(job, job.text, this.completeMode(job)));
+    return Boolean(flight && !flight.work.signal.aborted);
+  }
+
+  private completeMode(job: SpeechJob): string {
+    return job.followText ? 'aligned' : job.config.provider === 'edge' ? 'complete' : 'speech';
+  }
+
+  /** PCM for the browser and WAV writer is always signed 16-bit little-endian. */
+  async *pcm(job: SpeechJob, signal?: AbortSignal): AsyncGenerator<{ sampleRate: number; data: Buffer }> {
+    const { config, voice, text } = job;
+    const local = config.provider === 'gsv';
+    const chunks: AsyncIterable<ProviderChunk> = local
+      ? this.gsv.streamWithPreset(text, voice as VoicePreset, signal, { config, timeoutMs: 0 })
+      : config.provider === 'custom' ? this.custom.stream(text, voice as string, signal, config)
+        : this.deepseek.stream(text, voice as string, signal, config, part =>
+          this.opts.stats?.reserveDeepseek(part, Boolean(job.automatic), config.deepseekAutoCharsPerDay ?? null));
+    let sampleRate: number | undefined;
+    for await (const chunk of chunks) {
+      signal?.throwIfAborted();
+      if (!chunk.mime.startsWith('audio/pcm') || !chunk.sampleRate || !chunk.data.length) continue;
+      if (sampleRate && chunk.sampleRate !== sampleRate) throw new Error('朗读过程中音频采样率发生变化');
+      sampleRate = chunk.sampleRate;
+      yield {
+        sampleRate,
+        data: local ? float32ToInt16(Buffer.from(chunk.data)) : Buffer.from(chunk.data),
+      };
+    }
+  }
+
+  async synthesizeFullWav(text: string, voice: VoicePreset, signal?: AbortSignal): Promise<CompleteAudio> {
+    return this.complete(this.prepareJob(text, voice, 'gsv'), signal);
+  }
+
+  async synthesizeLongWav(text: string, voice?: string, signal?: AbortSignal): Promise<CompleteAudio> {
+    return this.complete(this.prepareJob(text, voice, 'deepseek'), signal);
+  }
+
+  async complete(job: SpeechJob, signal?: AbortSignal): Promise<CompleteAudio> {
+    signal?.throwIfAborted();
+    const cached = this.cachedComplete(job);
+    if (cached) return cached;
+    const name = this.cacheName(job, job.text, this.completeMode(job));
+    try {
+      const work = job.config.provider === 'edge'
+        ? this.shared(this.mp3InFlight, name, active => this.renderMp3(job, name, active))
+        : this.wavFlight(name, active => job.followText ? this.alignedPcm(job, active) : this.pcm(job, active)).work;
+      return await work.wait(signal);
+    } catch (error) { this.report(error, signal); throw error; }
+  }
+
+  private async renderMp3(job: SpeechJob, name: string, signal: AbortSignal): Promise<CompleteAudio> {
+    const parts = this.split(job.text, job.followText);
+    const pending = this.audioStore.temporaryPath(name);
+    const fd = openSync(pending, 'wx');
+    let bytes = 0;
+    try {
+      try {
+        for (const part of parts) {
+          signal?.throwIfAborted();
+          const clip = await this.synthesizePart(job, part, signal);
+          const mp3 = readFileSync(join(this.audioStore.directory, clip.filename));
+          if (bytes + mp3.length > MAX_AUDIO_BYTES) throw new Error('音频文件超过缓存容量');
+          writeFileSync(fd, mp3);
+          bytes += mp3.length;
+        }
+      } finally { closeSync(fd); }
+      signal?.throwIfAborted();
+      const saved = this.audioStore.publish(name, pending);
+      const result = { audioUrl: saved.url, duration: bytes * 8 / 48000, bytes, parts: parts.length };
+      this.remember(name, result);
+      return result;
+    } finally {
+      try { unlinkSync(pending); } catch { /* 文件已清理 */ }
+    }
+  }
+
+  private wavFlight(name: string, source: PcmSource) {
+    const existing = this.wavInFlight.get(name);
+    if (existing && !existing.work.signal.aborted) return existing;
+    const progress: WavProgress = {
+      file: this.audioStore.temporaryPath(name), bytes: 0, sampleRate: 0,
+      change: changeSignal(), state: 'running',
+    };
+    const work = new SharedWork(active => this.renderWav(name, progress, source(active), active));
+    const flight = { work, progress };
+    this.wavInFlight.set(name, flight);
+    const settle = (state: 'complete' | 'failed', error?: unknown) => {
+      progress.state = state;
+      progress.error = error;
+      if (this.wavInFlight.get(name) === flight) this.wavInFlight.delete(name);
+      notify(progress);
+    };
+    void work.result.then(() => settle('complete'), error => settle('failed', error));
+    return flight;
+  }
+
+  async *liveWav(job: SpeechJob, signal: AbortSignal) {
+    signal.throwIfAborted();
+    const name = this.cacheName(job, job.text, this.completeMode(job));
+    if (this.find(name, job.config.provider)) {
+      for await (const chunk of createReadStream(join(this.audioStore.directory, name), { signal })) {
+        yield Uint8Array.from(chunk);
+      }
+      return;
+    }
+    const { work, progress } = this.wavFlight(name, active =>
+      job.followText ? this.alignedPcm(job, active) : this.pcm(job, active));
+    const release = work.retain(signal);
+    let offset = 0;
+    let headerSent = false;
+    try {
+      for (;;) {
+        signal.throwIfAborted();
+        if (progress.state === 'failed') throw progress.error;
+        if (progress.bytes && !headerSent) {
+          headerSent = true;
+          yield Uint8Array.from(wavHeader(progress.sampleRate));
+          continue;
+        }
+        if (offset < progress.bytes) {
+          const output = new Uint8Array(Math.min(64 * 1024, progress.bytes - offset));
+          const fd = openSync(progress.file, 'r');
+          let count: number;
+          try { count = readSync(fd, output, 0, output.length, 44 + offset); }
+          finally { closeSync(fd); }
+          if (!count) throw new Error('共享音频写入意外中止');
+          offset += count;
+          yield output.subarray(0, count);
+          continue;
+        }
+        if (progress.state === 'complete') return;
+        await waitWithSignal(progress.change.promise, signal);
+      }
+    } finally { release(); }
+  }
+
+  private async *alignedPcm(job: SpeechJob, signal?: AbortSignal) {
+    let sampleRate = 0;
+    for (const text of this.split(job.text, true)) {
+      const segment = await this.synthesizePart(job, text, signal);
+      const wav = parseWav(readFileSync(join(this.audioStore.directory, segment.filename)));
+      if (!wav || wav.channels !== 1 || (wav.bits !== 16 && wav.bits !== 32)
+        || (sampleRate && sampleRate !== wav.sampleRate)) {
+        throw new Error('逐句音频格式不一致，无法生成对应字幕的整段文件');
+      }
+      sampleRate = wav.sampleRate;
+      yield { sampleRate, data: wav.bits === 32 ? float32ToInt16(wav.data) : wav.data };
+    }
+  }
+
+  private async renderWav(
+    name: string,
+    progress: WavProgress,
+    chunks: AsyncIterable<{ sampleRate: number; data: Buffer }>,
+    signal: AbortSignal,
+  ): Promise<CompleteAudio> {
+    const pending = progress.file;
+    const fd = openSync(pending, 'wx');
+    let sampleRate = 0;
+    let pcmBytes = 0;
+    try {
+      try {
+        writeFileSync(fd, Buffer.alloc(44));
+        for await (const chunk of chunks) {
+          signal.throwIfAborted();
+          if (pcmBytes + chunk.data.length + 44 > MAX_AUDIO_BYTES) throw new Error('音频文件超过缓存容量');
+          sampleRate ||= chunk.sampleRate;
+          writeFileSync(fd, chunk.data);
+          pcmBytes += chunk.data.length;
+          progress.sampleRate = sampleRate;
+          progress.bytes = pcmBytes;
+          notify(progress);
+        }
+        if (!pcmBytes) throw new Error('未收到任何音频数据');
+        const header = wavHeader(sampleRate);
+        header.writeUInt32LE(36 + pcmBytes, 4);
+        header.writeUInt32LE(pcmBytes, 40);
+        writeSync(fd, header, 0, header.length, 0);
+      } finally { closeSync(fd); }
+      signal?.throwIfAborted();
+      const saved = this.audioStore.publish(name, pending);
+      progress.file = join(this.audioStore.directory, name);
+      const result = { audioUrl: saved.url, duration: pcmBytes / (sampleRate * 2), bytes: pcmBytes + 44, parts: 1 };
+      this.remember(name, result);
+      return result;
+    } finally {
+      try { unlinkSync(pending); } catch { /* 文件已清理 */ }
+    }
+  }
+
+  private async edgeAudio(text: string, voice: string, signal: AbortSignal): Promise<{ mp3: Buffer; cues: SpeechCue[] }> {
+    const fallback = defaultVoiceFor('edge') || 'zh-CN-XiaoxiaoNeural';
+    const attempts = voice === fallback ? [voice, voice, voice] : [voice, voice, voice, fallback];
     let lastError: unknown;
-    // Edge 偶发 429 / 空流：短退避重试两次，再换晓晓兜底。
-    for (let i = 0; i < 3; i++) {
+    for (const [index, id] of attempts.entries()) {
+      signal.throwIfAborted();
+      const parts: Buffer[] = [];
+      const cues: SpeechCue[] = [];
       try {
-        parts = await attempt(id);
-      } catch (e) {
-        if (signal?.aborted) throw e;
-        lastError = e;
+        for await (const chunk of this.edge.stream(text, id, signal)) {
+          if (chunk.mime === 'audio/mpeg' && chunk.data.length) parts.push(Buffer.from(chunk.data));
+          if (chunk.cues) cues.push(...chunk.cues);
+        }
+        signal.throwIfAborted();
+        if (parts.length) return { mp3: Buffer.concat(parts), cues };
+      } catch (error) {
+        signal.throwIfAborted();
+        lastError = error;
       }
-      if (parts.length > 0) break;
-      if (i < 2) await new Promise((resolve) => setTimeout(resolve, 400 * (i + 1)));
+      if (index < 2) await delay(400 * (index + 1), undefined, { signal });
     }
-    if (parts.length === 0 && id !== edgeFallback) {
-      try {
-        parts = await attempt(edgeFallback);
-      } catch (e) {
-        if (signal?.aborted) throw e;
-        lastError = e;
-      }
-    }
-    if (parts.length === 0) {
-      const suffix = lastError ? `：${String((lastError as Error)?.message ?? lastError)}` : '';
-      throw new Error(`Edge 未返回音频数据（云端通道可能不可用${suffix}）`);
-    }
-    const saved = this.audioStore.saveRaw(`tts_${Date.now()}_${(fileCounter++).toString(36)}.mp3`, Buffer.concat(parts));
-    return { audioUrl: saved.url, audioLen: 0, filename: saved.name };
+    throw new Error(`Edge 未返回音频数据${lastError ? `：${(lastError as Error).message}` : ''}`);
   }
 }

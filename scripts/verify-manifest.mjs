@@ -28,7 +28,16 @@ if (!Array.isArray(pkg.dsh?.client?.inject) || pkg.dsh.client.inject.length === 
 if (Array.isArray(pkg.dsh?.client?.inject) && pkg.dsh.client.inject.includes('@deepseek-ai/dsh-client-runtime')) {
   failures.push('dsh.client.inject still references the removed @deepseek-ai/dsh-client-runtime package')
 }
-if (!existsSync(resolve(root, 'lib/client.js'))) failures.push('lib/client.js is missing — client bundle must be committed')
+for (const file of ['client.js', 'client.d.ts']) {
+  const target = resolve(root, 'lib', file);
+  if (!existsSync(target)) failures.push(`lib/${file} is missing — run the build first`);
+  else if (!readFileSync(target).equals(readFileSync(resolve(root, 'client', file)))) {
+    failures.push(`lib/${file} does not match its source — run the build again`);
+  }
+}
+for (const asset of ['lib/index.js', 'scripts/dsh_stream_api.py', 'cordis.patch.yml', 'docs/voices.json']) {
+  if (!existsSync(resolve(root, asset))) failures.push(`${asset} is missing`);
+}
 
 if (failures.length) {
   console.error(`[verify-manifest] ${failures.length} issue(s):`)

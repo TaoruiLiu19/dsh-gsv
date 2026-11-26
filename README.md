@@ -1,360 +1,214 @@
-# dsh-gsv-tts
+<p align="center">
+  <img src="docs/images/readme-cover.webp" alt="深靛色背景上的蓝紫色玻璃声波" width="780">
+</p>
 
-> 为 DSH（DeepSeek Harness）接入语音朗读能力 —— 三模式可选：**云端快速体验**（Edge，免安装、装上即听）+ **本地专业**（GSV-TTS-Lite，音色克隆、完全离线）+ **官方语音**（DeepSeek TTS，按字符计费、复用已有 Key）。
+<h1 align="center">dsh-gsv-tts</h1>
 
-![CI](https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&label=CI&logo=github)
-![npm](https://img.shields.io/npm/v/dsh-gsv-tts)
-![Downloads](https://img.shields.io/npm/dt/dsh-gsv-tts)
-![License](https://img.shields.io/npm/l/dsh-gsv-tts)
-[![Listed on awesome-dsh-plugin](https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square)](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/)
-[![Voice Market](https://img.shields.io/badge/%E9%9F%B3%E8%89%B2%E5%B8%82%E5%9C%BA-Voice%20Market-10b981?style=flat-square)](https://taoruiliu19.github.io/gsv-market/)
-[![DSH Insights health](https://dsh-insights.com/badge/TaoruiLiu19/dsh-gsv.svg)](https://dsh-insights.com/p/TaoruiLiu19/dsh-gsv/?utm_source=badge&utm_medium=readme&utm_campaign=TaoruiLiu19/dsh-gsv)
+<p align="center"><strong>在 DeepSeek Harness 里听助手回复。</strong></p>
 
-音色市场：[taoruiliu19.github.io/gsv-market](https://taoruiliu19.github.io/gsv-market/) · 投稿指南：[docs/VOICE_MARKET.md](docs/VOICE_MARKET.md)
+<p align="center">
+  一键朗读消息，边生成边听，长回复还可以下载。<br>
+  默认用 Edge 开始，随时切换到本地 GSV、DeepSeek 官方语音或自己的 TTS 服务。
+</p>
 
-English README: [README_EN.md](README_EN.md) · 变更记录: [CHANGELOG.md](CHANGELOG.md)
+<p align="center">
+  <a href="https://www.npmjs.com/package/dsh-gsv-tts"><img alt="npm 版本" src="https://img.shields.io/npm/v/dsh-gsv-tts"></a>
+  <a href="https://www.npmjs.com/package/dsh-gsv-tts"><img alt="npm 总下载量" src="https://img.shields.io/npm/dt/dsh-gsv-tts"></a>
+  <a href="https://github.com/TaoruiLiu19/dsh-gsv/actions/workflows/ci.yml"><img alt="构建状态" src="https://img.shields.io/github/actions/workflow/status/TaoruiLiu19/dsh-gsv/ci.yml?branch=master&amp;label=CI&amp;logo=github"></a>
+  <a href="LICENSE"><img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
----
+<p align="center">
+  <a href="https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/"><img alt="收录于 Awesome DSH Plugin" src="https://img.shields.io/badge/Listed%20on-awesome--dsh--plugin.com-8B5CF6?style=flat-square"></a>
+  <a href="https://taoruiliu19.github.io/gsv-market/"><img alt="音色市场" src="https://img.shields.io/badge/%E9%9F%B3%E8%89%B2%E5%B8%82%E5%9C%BA-Voice%20Market-10b981?style=flat-square"></a>
+  <a href="https://dsh-insights.com/p/TaoruiLiu19/dsh-gsv/?utm_source=badge&amp;utm_medium=readme&amp;utm_campaign=TaoruiLiu19/dsh-gsv"><img alt="DSH Insights 健康状态" src="https://dsh-insights.com/badge/TaoruiLiu19/dsh-gsv.svg"></a>
+</p>
 
-## ✨ 功能亮点
+<p align="center">
+  <a href="#quick-start"><strong>快速安装</strong></a> ·
+  <a href="https://taoruiliu19.github.io/gsv-market/"><strong>在线试听</strong></a> ·
+  <a href="#choose-a-voice-provider">选择语音</a> ·
+  <a href="README_EN.md">English</a>
+</p>
 
-- 🌐 **云端快速体验（Edge）**：**零配置、装上即用**，无需 Python / 模型 / 引擎；20+ 种免费自然语言音色（晓晓、云希、Aria 等），联网即用，出声较快
-- ☁️ **官方语音（DeepSeek）**：官方 TTS 接口，音色 `stella`（海星）/ `tide`（暗潮），10 种语种按文本自动识别；按字符计费（刊例 3 元/万字符，汉字算 2 字符），复用已有 DeepSeek Key，**非默认模式**
-- 🖥️ **本地专业（GSV）**：按参考音频**克隆目标音色**、**完全离线**；由云端简单模式一键升级引导而来
-- 🔊 **一键朗读**：每条助手消息旁的 🔊 按钮直接朗读（自动排除思考内容）；长回复**流式播放**（首块到达即出声，不再等整段合成完），带暂停/继续/停止与进度显示，正在朗读的消息会高亮
-- ⚡ **首音更快**：可选**常驻模式（性能优先）**，插件加载后自动启动并预热默认音色；朗读走**流式 WAV**，长回复首音明显更快。默认**节能模式（资源优先）**，不后台占资源（与旧版一致）
-- ⏩ **整段播放 / 下载 + 朗读选中**：朗读时点浮动面板的「整段」可生成可拖动进度、可下载的完整音频；选中聊天文字可单独朗读。默认朗读仍走流式，不会因此变慢
-- 🔁 **自动朗读**：开启后自动朗读助手回复；新回复默认打断当前朗读（barge-in），可在设置中关闭
-- 🗣️ **发音词典**：一行 `原词=读法` 修正多音字、缩写与专名（如 `DSH=DeepSeek`），支持按模式分节与零成本预览，**三种模式共用**
-- 🩺 **一句诊断**：`tts_doctor` 直接告诉你凭据从哪来、引擎/模型缺什么、最近一次失败是什么、下一步该做什么
-- 🔄 **模式切换**：设置面板一键在"快速体验 / 本地专业"间切换，音色与状态实时跟随
-- 🎛️ **声音设置面板**：可视化配置，**保存即热生效**（无需重启）；每条音色可"试听"，或"全部试听"循环对比
-- 🎪 **音色市场**：从内置/自定义远端清单**一键下载并注入音色**，试听后安装、只读托管；内置可信源免确认，远端源二次确认；欢迎[投稿](docs/VOICE_MARKET.md)分享你喜欢的音色
-- 🚀 **引擎一键启停 / 一键安装**：启动方式可选**常驻模式（性能优先）**或**节能模式（资源优先，默认）**；也支持设置面板手动启停，模型加载约 15~90 秒
-- 🔗 **同源音频短链接**：合成音频落盘并同源提供，不再撑爆模型上下文
+<a name="quick-start"></a>
 
----
+## 快速上手
 
-## 🎯 快速上手（三种模式，任选其一）
-
-| 你的诉求 | 用哪种 | 怎么开始 |
-|---|---|---|
-| "我就想**装上就能听**" | 🌐 **快速体验（Edge）** | 见下方「一、快速体验模式」——**无需任何安装** |
-| "我要**克隆自己的声音 / 完全离线**" | 🖥️ **本地专业（GSV）** | 见下方「二、本地专业模式」 |
-| "我**已经有 DeepSeek Key**，想走官方通道" | ☁️ **官方语音（DeepSeek）** | 见下方「三、官方语音模式」——填 Key 即可，**按字符计费** |
-
-> **默认模式**：全新安装默认为 **Edge 快速体验**（联网即用）；**从旧版本升级的老用户仍保持 GSV 本地模式、声音不变**，可随时在设置面板切换。
->
-> **DSH 版本要求**：5.0.0 起适配 **DSH 0.2.1-rc.2+**（`engines.dsh`）。DSH 0.2 把设置改成了 volatile 配置 + 客户端 `configForms` 服务，5.0.0 已同步迁移；DSH 0.1.x 请使用 4.x 版本插件。
-
-### 一、快速体验模式（Edge，新装默认）
-
-1. 安装插件并重启 DSH（见「📦 安装」）
-2. 打开 设置 → 声音设置 → **TTS 模式**选 **快速体验（Edge）**
-3. "音色"下拉选一个云端音色（晓晓 / 云希 / Aria…）
-4. 点任意助手消息旁的 🔊 —— **出声较快**
-
-> 无需安装 Python、无需模型、无需启动引擎。仅需联网。云端音色标注 🌐，为您提供免配置即听的入口。
-
-### 二、本地专业模式（GSV）
-
-1. 安装插件并重启 DSH（见「📦 安装」）
-2. 打开 设置 → 声音设置 → **TTS 模式**选 **本地专业（GSV）**
-3. **安装引擎**：让 agent 调用 `tts_setup_engine`，或见「🔧 安装 GSV-TTS-Lite 引擎」
-4. **选择引擎启动方式**：默认**节能模式（资源优先）**，不后台启动、首次出声较慢（需要先启动引擎，与旧版一致）；切到**常驻模式（性能优先）**会自动启动并预热，首次出声较快。
-5. **添加音色**：在"音色预设"添加，或从「🎪 音色市场」一键下载，或克隆
-6. 点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
-
-> 本地模式全程离线运行，支持音色克隆，不依赖网络与云端配额。
-
-### 三、官方语音模式（DeepSeek，按量计费）
-
-1. 安装插件并重启 DSH
-2. 打开 设置 → 声音设置 → **TTS 模式**选 **官方语音（DeepSeek）**
-3. **无需填 Key**：插件默认复用 Harness 凭据服务里的 `DEEPSEEK_API_KEY`（就是模型设置里保存的那份，两者同一凭据）；只有想用另一份额度时，才在“DeepSeek API Key”里手填覆盖
-4. 音色下拉选 **海星（stella，女声）** 或 **暗潮（tide，男声）**，可先点「试听」对比
-5. 点任意助手消息旁的 🔊，或让 agent 调用 `tts_speak`
-
-> **复用了什么**：插件通过 `ctx.get('credentials')` 按引用名解析 Key（默认 `DEEPSEEK_API_KEY`，可在“凭据名称”里改）。所以 Harness 里能正常对话，这里就能直接朗读；如果 Harness 只用了账号登录、没有保存 API Key，健康提示会告诉你先去模型设置里保存 Key（或导出同名环境变量）。若 Harness 用 `DEEPSEEK_BASE_URL` 指向网关，插件也沿用该地址请求 `/v1/tools/tts`。
-
-> **计费提醒**：官方接口按字符计费（刊例 3 元/万字符，汉字算 2 个字符，即 1000 汉字约 0.6 元；限时五折约 0.3 元）。开启**自动朗读**会持续产生费用，请按需开启。官方语音不支持调速、音色克隆与自定义音色，需要这些能力请用本地 GSV 模式。
->
-> **Key 存储**：默认不往插件配置写 Key——用的是 Harness 凭据存储里的那份（`.credentials.yaml`，本就由 Harness 明文管理）；手填的 Key 才会进入插件配置。
-
-## 📦 安装
-
-两种方式任选其一，然后在设置中启用：
+适用于 DSH `0.2.2-rc.1` 起的 `0.2.x` 版本。在终端安装到你的 DSH profile。
 
 ```bash
-# 方式一：从 npm 安装
 dsh plugin --profile web add dsh-gsv-tts
+```
 
-# 方式二：从 GitHub 安装
+桌面版使用 `desktop` profile 时，将命令中的 `web` 换成 `desktop`。重启 DSH，在插件页启用 **dsh-gsv-tts**，然后点击任意助手消息旁的 **🔊 朗读结果**。首次安装默认选中 Edge，联网即可试听。
+
+<p align="center">
+  <img src="docs/images/read-button.png" alt="DSH 消息工具栏中的朗读结果按钮" width="360">
+</p>
+
+> **可以这样试。** 让 DSH「用三句话介绍你正在做的项目」，然后点一下 🔊。只想听其中一句时，选中那段文字，再点选区旁的朗读按钮。
+
+<details>
+<summary>从 GitHub 安装或从旧版升级</summary>
+
+```bash
 dsh plugin --profile web add "github:TaoruiLiu19/dsh-gsv"
 ```
 
-> **关于 profile**：以上以 `web` profile 为例；当前桌面应用常用 `desktop` profile，把命令里的 `web` 换成 `desktop` 即可。
+Git 安装会运行 `prepare` 构建。若 pnpm 提示拦截了构建脚本，在该 profile 的 `pnpm-workspace.yaml` 中按提示把对应项目加入 `allowBuilds`，再重试。npm 安装使用预构建产物。
 
-安装后重启 DSH，工具自动注册到 agent，设置中出现"声音设置"项。
+已有提供方配置会沿用。旧配置未指定提供方但已有本地音色时，升级后使用 GSV。
 
-> 依赖 DSH 的 `webServer` 服务（Web / Desktop profile 自带）提供音频下载；`settings` 服务提供设置面板。环境缺少这些服务时仅保留工具能力。
+</details>
 
-> **从 4.x 升级**：直接安装新版即可，配置自动沿用；首次启动会把 `provider` 落定写回一次（有音色的老配置保持 `gsv`，全新安装为 `edge`），之后设置保存通过 DSH 0.2 的 volatile 配置就地热更新，不再重载插件。
+## 三种听法
 
-## 🔄 模式切换与迁移
+| 想怎么听 | 在 DSH 里这样做 |
+| --- | --- |
+| **只听重点** | 点击消息旁的 🔊 朗读整条可见回复，或选中一段文字单独朗读。 |
+| **边生成边听** | 在「设置 → 声音设置」开启「自动朗读助手回复」和「生成时逐句朗读可见正文」。生成出完整句子就可以开始听。模型重试或取消时，对应的待播语音会撤销。 |
+| **跟读、回听或带走** | 用浮动播放器调倍速和音量。开启「逐句跟读」后，从下一次朗读开始可跳句、看高亮、导出 SRT。点击「整段」可获得可拖动进度的音频，也能直接下载。 |
 
-| 项 | 说明 |
-|---|---|
-| 如何切换 | 设置 → 声音设置 → **TTS 模式**（快速体验 / 官方语音 / 本地专业），切换即时生效 |
-| 配置项 | `provider: 'edge' \| 'deepseek' \| 'gsv'`（建议经设置面板切换，勿手动改） |
-| 老用户升级 | 无 `provider` 字段的旧配置：**有音色预设 → 保持 `gsv` 本地模式，声音不变** |
-| 全新安装 | 无音色预设 → 默认 `edge` 云端简单模式，联网即用 |
-| 写入时机 | 首次启动判定后写回一次（`settings.update`），之后不再改写 |
-| `schemaVersion` | 配置结构版本，迁移守卫的落点 |
+自动朗读默认关闭。开启后，可以在声音设置选择新回复是否打断当前播放。Edge 和 GSV 提供对齐数据时，跟读还会在播放器内标记当前词或字。
 
-> Edge / 官方语音模式需联网；若云端不可用，面板会提示"云端通道拥挤 / 暂不可用"，本地 GSV 模式始终可用作降级。
+<a name="choose-a-voice-provider"></a>
 
----
+## 选择语音提供方
 
-## 🏗️ 系统架构
+在 **设置 → 声音设置 → TTS 模式** 切换。四个提供方分别记住选过的默认音色。
 
-![dsh-gsv-tts 系统构成与三 provider 数据流](docs/images/architecture.png)
+| 提供方 | 适合谁 | 上手条件 |
+| --- | --- | --- |
+| **Edge** · 快速体验 | 想先听一遍，从晓晓、云希或 Aria 等音色选起 | 联网即可 |
+| **GSV-TTS-Lite** · 本地专业 | 想做本地离线合成，或用自己拥有授权的参考音频克隆音色 | 安装引擎，准备模型和音色 |
+| **DeepSeek** · 官方语音 | 想使用海星 `stella` 或暗潮 `tide` | 可复用 DSH 中保存的 API Key，按字符计费 |
+| **自定义 TTS** | 已在使用 Kokoro-FastAPI 或其他 OpenAI 兼容语音服务 | 填写 Base URL、模型和音色 |
 
-> 📖 交互式架构图：[打开 dsh-gsv-tts.architecture.html](docs/architecture/dsh-gsv-tts.architecture.html)（支持缩放、聚焦、主题切换）
+<details>
+<summary>查看声音设置和本地引擎截图</summary>
 
-**三 provider 架构**：`TTSService` 按 `config.provider` 分发到云端（Edge）、官方（DeepSeek）或本地（GSV），朗读主链路与工具调用两条路径对三种 provider 一致。
+<p align="center">
+  <img src="docs/images/settings-voice.png" alt="DSH 声音设置、TTS 模式和音色预设界面" width="560">
+  <br>
+  <img src="docs/images/engine-running.png" alt="本地 GSV 引擎运行状态" width="560">
+</p>
 
-- 🔊 **朗读主链路（经 webServer）**：用户点击 🔊 → DSH Web 客户端 → `webServer` 的 `/speak` 路由 → `TTSService` 按 provider 请求 → 云端 / 官方 / 本地引擎返回音频 → `AudioStore` 落盘 → 同源短链接回传浏览器播放（首段 30 字，逐段即到即播）。
-- 🤖 **Agent 工具调用（宿主内直连）**：Agent 调用 `tts_speak` 等工具时，由宿主进程内 tools 服务**直接**执行，**不经 webServer HTTP 网关**。
-- 🔑 **凭据复用**：官方语音通过 Harness 的 `ctx.get('credentials')` 解析 `DEEPSEEK_API_KEY`，与模型鉴权同一份凭据，插件配置里不落 Key。
-- 🧭 **目录驱动**：`src/catalog.ts` 是 provider 能力（是否需要引擎/凭据、是否计费、音色来源、默认音色）与本地引擎模型清单的唯一事实源；客户端从 `/provider/catalog` 渲染模式 Tab 与字段，服务端路由校验、工具渲染与迁移守卫读同一份描述符。
+</details>
 
-| 构成 | 说明 |
-|------|------|
-| DSH 应用（DeepSeek Harness） | 插件宿主：Web 客户端、webServer、settings 服务、credentials 凭据服务 |
-| dsh-gsv-tts 插件 | `TTSService`（按 provider 分发）/ `AudioStore`（落盘）/ 引擎管理（启停·安装·健康检查） |
-| Edge provider | `edge-tts-universal`，微软精选网络音色，返回 MP3 流（浏览器解码） |
-| DeepSeek provider | 官方 `POST /v1/tools/tts`，海星 / 暗潮两个音色，返回 16-bit PCM WAV（重新装头落盘，长文本边收边写） |
-| GSV-TTS-Lite 本地引擎 | 本机 Python 进程，FastAPI :9880，真流式 `/tts/stream`，返回 WAV |
+## 播放与可靠性
 
-## 📸 截图
+- **边播边下载。** 同一段音频的并发播放与下载可以复用一个上游合成任务。各端可独立取消，最后一个使用者取消时才结束上游合成。
+- **预算随 DSH 用户目录走。** DeepSeek 自动朗读可以设置每日字符上限。同一 DSH 用户目录的工作区和 profile 共用用量账本。留空为不限，填 `0` 可阻止新的自动合成。最终费用以服务方账单为准。
+- **音色成对安装。** 音色市场在下载时限制清单和音频体积并校验 SHA-256。参考音频与提示音频全部通过才一起发布，设置写入失败会保留原来的音色。
+- **关掉插件就停。** 热重载和禁用会停播、取消在途请求并清理浮层。启用 DSH 宿主的语音输入后，录音或转写期间也会暂停自动朗读。 [DSH 语音输入指南](https://github.com/deepseek-ai/deepseek-harness/blob/dsh-v0.2.2-rc.1/packages/experimental/voice-input-bundle/README.zh.md)
 
-![声音设置面板](docs/images/settings-voice.png)
+## 配出顺耳的声音
 
-*设置 → 声音设置：TTS 模式、引擎开关、音色配置、健康状态*
+### 音色市场
 
-![朗读按钮](docs/images/read-button.png)
+先在网页听，再去插件内安装。在 GSV 模式打开 **声音设置 → 音色市场**，查看音色的来源、作者和许可，试听后选择安装。远端新增音色需二次确认。已安装的市场音色会加入本地预设，卸载时可选择是否删除文件。 [在线试听](https://taoruiliu19.github.io/gsv-market/) · [投稿指南](docs/VOICE_MARKET.md)
 
-*消息操作区的 🔊 朗读按钮（悬停显示"朗读结果"）*
+### 发音词典
 
-![引擎运行中](docs/images/engine-running.png)
+在「声音设置 → 发音词典」每行写一条 `原词=读法`。可以为不同提供方指定读法，让项目名、缩写或多音字读起来更自然。
 
-*本地引擎启动后的"运行中"状态*
-
----
-
-## 🌐 快速体验模式（Edge）详解
-
-- **音色**：20+ 种微软精选自然音色（中文晓晓 / 云希 / 云野等，英文 Aria 等），面板下拉即选，无需配置。
-- **输出**：MP3 音频流，由 `edge-tts-universal` 生成，经 `AudioStore` 落盘为 `.mp3` 并同源提供，浏览器直接解码（**无转码开销**）。
-- **健康检测**：内置连接超时、令牌自动刷新与错误恢复；面板显示云端可用状态。
-- **限流与降级**：微软可能对过量使用限流。若检测到云端不可用，面板会引导切到本地 GSV（无限量 + 可克隆）。
-- **配额字段**：`quotaDaily`（默认 `null` = 不限量）为预留引导字段，硬配额待后续版本。
-
-## 🖥️ 本地专业模式（GSV）详解
-
-- **能力**：按参考音频**克隆目标音色**；完全离线运行，数据不出本机。
-- **成本**：需安装 Python 环境 + 下载模型；首次模型加载约 15~90 秒。
-- **入口**：见「🔧 安装 GSV-TTS-Lite 引擎」与「🎙️ 添加音色 / 音色市场」。
-
----
-
-## 🔧 安装 GSV-TTS-Lite 引擎
-
-### 方式一：自动安装（推荐）
-
-让 agent 调用 `tts_setup_engine`，自动完成：检测 Python → 安装 `gsv-tts-lite==0.4.7` → 克隆仓库 → 安装依赖 → 部署流式 API → 启动服务。
-
-### 方式二：手动安装
-
-1. 安装 **Python 3.10+**（推荐 3.12），确保 `pip` 可用
-2. 安装核心包：`pip install gsv-tts-lite==0.4.7`
-3. 克隆仓库：`git clone https://github.com/chinokikiss/GSV-TTS-Lite.git`
-4. 安装 API 依赖：`pip install -r <仓库>/API/requirements.txt`
-5. 把本插件 `scripts/` 下的 `dsh_stream_api.py` 复制到 `<仓库>/API/` 目录（真流式 API）
-6. 下载模型（`s1v3.ckpt`、`s2Gv2ProPlus.pth` 等）放入 `<仓库>/models/`
-7. 启动：`python <仓库>/API/dsh_stream_api.py -p 9880 --models_dir <仓库>/models`
-8. 在 设置 → 声音设置 打开引擎开关验证
-
-> 引擎示例音频位于 `<仓库>/examples/`（`laffey.mp3`、`AnAn.ogg`），可直接用作测试音色。
-
-## 🎪 音色市场
-
-从音色市场一键下载并注入音色，无需手动填写参考音频路径。
-
-> 🌐 **在线试听网站**：[https://taoruiliu19.github.io/gsv-market/](https://taoruiliu19.github.io/gsv-market/) —— 浏览、试听、下载市场中的全部音色，无需安装插件。
-
-1. 打开 设置 → 声音设置 → **音色市场**
-2. 浏览音色卡片（来源、作者、许可），点 **试听** 预听
-3. 点 **安装**：
-   - 内置可信清单（`trusted`）→ 直接安装
-   - 自定义远端清单（`voiceRegistryUrl`）→ 二次确认来源与许可后安装
-4. 安装后音色自动加入"音色预设"，即可在 🔊 / `tts_speak` 中选用
-5. 市场安装的音色在面板中**只读**（仅可卸载），防止误改破坏账本；点 **卸载** 可（提示）同时删除本地音频
-
-> **信任规则（A+ 混合模式）**：包内 `docs/voices.json` 收录的音色始终视为 trusted（随包发布已审计），即便经远端清单展示也免确认；远端清单中新增的音色（包内未收录）一律二次确认。合并时以 id 为键，包内优先，远端只补充新 id。自定义音色请在"音色预设"手工添加。
-
-## 🎙️ 添加音色（本地 GSV）
-
-1. 打开 设置 → 声音设置
-2. "音色预设"下点击"添加音色"
-3. 填写四个字段：
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `音色名称` | 音色名，`tts_speak` 与 🔊 按钮按它选择 | `拉菲` |
-| `参考音频路径` | 目标音色参考音频（决定声音像谁） | `D:\GSV\GSV-TTS-Lite\examples\laffey.mp3` |
-| `提示音频路径` | 语调/情感参考音频 | `D:\GSV\GSV-TTS-Lite\examples\AnAn.ogg` |
-| `提示文本` | 提示音频对应的文字（引擎不支持留空自动转写，务必填写） | `ちが……ちがう。レイア、貴様は間違っている。` |
-
-4. 点击"保存"，立即生效，无需重启
-5. 默认音色留空则使用列表第一个音色
-
-> 参考音频路径必须是**引擎服务端能访问的本地路径或可访问 URL**。
-
-## ⚙️ 声音设置说明
-
-| 字段 | 说明 | 默认值 |
-|------|------|--------|
-| TTS 模式 | 快速体验（Edge 云端，免安装）/ 官方语音（DeepSeek，按量计费）/ 本地专业（GSV，离线/克隆） | 老用户 `gsv` / 新装 `edge` |
-| 引擎开关 | 启动/停止 GSV-TTS-Lite 引擎进程 | 关 |
-| `engineMode` | 引擎启动方式：`always` 常驻模式（性能优先，自动启动+预热）/ `eco` 节能模式（资源优先，不后台启动，与旧版一致） | `eco` |
-| `apiUrl` | 引擎 API 地址 | `http://localhost:9880` |
-| `defaultVoice` | 默认音色（gsv=预设名 / edge=云端音色 id / deepseek=`stella`\|`tide`，留空用第一个） | 空 |
-| `deepseekApiKey` | 可选：手填 API Key，覆盖 Harness 凭据（用另一份额度时填） | 空 |
-| `deepseekApiKeyEnv` | 凭据引用名，决定复用 Harness 里的哪份 Key；留空则不查凭据服务 | `DEEPSEEK_API_KEY` |
-| `timeout` | 请求超时（毫秒） | `30000` |
-| `installDir` | 引擎安装目录 | `./GSV-TTS-Lite` |
-| `autoPlay` | 自动朗读助手回复 | `false` |
-| `interruptOnNew` | 自动朗读时新回复是否打断当前朗读（关闭则朗读中跳过，避免叠音） | `true` |
-| `lexicon` | 发音词典（多行 `原词=读法`，`[deepseek]/[gsv]/[edge]` 分节，`#` 注释），所有模式生效 | 空 |
-| `voiceRegistryUrl` | 音色市场远端清单地址（默认指向在线试听站点；留空仅用包内离线清单） | 站点 URL |
-| `provider` | `gsv` \| `edge` \| `deepseek`（勿手动改；设置面板切换） | 见"TTS 模式" |
-| `schemaVersion` | 配置结构版本（迁移守卫落点） | `1` |
-| `quotaDaily` | 云端简单模式每日配额（`null`=不限量，仅引导用） | `null` |
-| `voices` | 音色预设列表 | 空 |
-
-### 引擎启动方式怎么选
-
-| 模式 | 首次出声 | 空闲时占用 | 适合 |
-|---|---|---|---|
-| **节能模式（资源优先，默认）** | 较慢（需先启动引擎） | 不占显存/内存 | 偶尔朗读、玩游戏、笔记本省电；与旧版行为一致 |
-| **常驻模式（性能优先）** | 较快 | 约 0.9GB 显存 + 0.5GB 内存 | 经常朗读、桌面/插电使用 |
-
-> 常驻模式会在插件加载后自动启动引擎并预热默认音色；节能模式不会自动启动，需要手动打开引擎开关（或由你调用 `tts_setup_engine` 后启动）。
-
-配置保存在当前 profile 的配置层（`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `dsh-gsv-tts:` 条目）。DSH 0.2 起这些字段是 **volatile 配置**：设置面板保存后宿主就地更新配置引用，插件无需重载即可读到新值。
-
-### 发音词典怎么用
-
-设置 → 声音设置 → **发音词典**，一行一条，保存即生效；支持按模式分节：
-
-```
-# 注释行以 # 或 // 开头；未分节的规则对所有模式生效
+```ini
+# 全局规则
 DSH=DeepSeek
-
-[deepseek]
-API=A P I
 
 [gsv]
 GSV=G S V
 ```
 
-规则（参考 VoiceStudio 的词典设计）：
+同名规则按提供方优先，长词优先匹配。调用 `tts_lexicon_preview` 可预览替换结果，这一步只处理文本。
 
-- `原词=读法`（也接受 `=>`），**字面匹配**，不是正则；
-- Unicode 大小写不敏感（中文不受影响）；
-- **长词优先**；同长度时**后写的优先**；
-- 更具体的作用域优先：`[deepseek]` 的同名条目覆盖全局；
-- 只扫描一次，替换结果不会被再次替换（不会 A→B→C 链式）。
+<details>
+<summary>本地 GSV 安装、模型与音色预设</summary>
 
-词典在文本清洗之后、分段之前应用，所以三种模式、`tts_speak`、自动朗读、整段朗读全部生效。想确认某句话会被读成什么，可以不合成、零成本地预览：
+1. 准备 Git 和 Python 3.10+，切到 GSV 后，让 agent 调用 `tts_setup_engine`。确认安装操作后，插件会将 GSV-TTS-Lite 0.4.7 的固定提交和 Python 虚拟环境放到 `installDir` 下。
+2. 将模型放到 `<installDir>/models`。旧安装的 `<installDir>/API/models` 也可继续使用。引擎日志在 `<installDir>/logs/engine.log`。
+3. 从音色市场装一个预设，或填写音色名称、目标音色参考音频、提示音频和对应的提示文本。音频路径应能被引擎读取。使用自己拥有授权的音频。
+4. 在声音设置启动引擎。默认「节能」由你手动启动，「常驻」会自动启动并预热默认音色。准备好模型和引擎后，本地合成可离线工作。
 
-```
-tts_lexicon_preview text="DSH 和 GSV 怎么读"
-```
+用 `gsvModelManifest` 指向可信来源提供的 JSON 校验清单，格式为 `{"version":"模型版本","files":{"s1v3.ckpt":"对应文件的 SHA-256"}}`。为默认 GPT 和 SoVITS 权重都填写哈希。设置后，托管引擎启动前会检查文件。
 
-### 没声音时先跑 `tts_doctor`
+自行管理引擎时，可在自己的虚拟环境内安装依赖并启动服务，然后把 `apiUrl` 指向该服务。
 
-```
-tts_doctor            # 本地事实：凭据、引擎、模型、最近失败
-tts_doctor deep=true  # 额外调用免费 GET /models 验证凭据（不产生合成费用）
+```bash
+python -m pip install -c scripts/gsv-constraints.txt -r scripts/gsv-requirements.txt
+python scripts/dsh_stream_api.py -p 9880 --models_dir "<模型绝对路径>"
 ```
 
-输出包括：当前模式、凭据是否配置及来源（插件设置 / Harness 凭据服务 / 环境变量）、**深度探活结果**、引擎是否安装与运行、缺失的模型文件、**Python / pip 包 / 仓库等前置条件**、最近 10 分钟失败、**引擎日志末尾几行**、音频缓存数量与词典规则数，以及按事实给出的修复建议（例如“未安装：tts_setup_engine”“模型缺失：s1v3.ckpt”）。它**不会返回任何密钥**。
+</details>
 
-## 🧰 工具列表
+<details>
+<summary>DeepSeek 凭据、自定义 TTS 与兼容性</summary>
 
-| 工具 | 功能 |
-|------|------|
-| `tts_speak` | 文本转语音；按当前 provider 与音色选择，流式合成返回同源短链接 |
-| `tts_list_voices` | 列出当前 provider 可用音色 |
-| `tts_health_check` | 检查当前 provider（引擎/云端）状态 |
-| `tts_doctor` | 诊断“为什么没声音”：凭据来源、引擎/模型/前置条件、最近失败与修复建议；`deep=true` 免费探活 |
-| `tts_lexicon_preview` | 预览发音词典会把文本读成什么（只替换、不合成、不产生费用） |
-| `tts_setup_engine` | 一键安装本地 GSV-TTS-Lite 引擎 |
+- **DeepSeek 凭据。** 默认按 `DEEPSEEK_API_KEY` 的引用名查找 DSH 凭据，也可使用同名环境变量。插件中手填的 Key 优先。仅登录 DeepSeek 账号的情况下，需先配置 API Key。配置了 `DEEPSEEK_BASE_URL` 的环境会将语音请求发给该地址。
+- **自定义 TTS。** 例如 Kokoro-FastAPI 可尝试 Base URL `http://127.0.0.1:8880/v1`、模型 `kokoro`、音色 `af_sarah`。格式支持 24 kHz PCM 或单声道 16-bit WAV。凭据按 DSH 引用名配置，语气和停顿指令由后端决定是否支持。
+- **缓存和用量。** 音频链接通过已认证的 DSH 同源路由提供，实例内的缓存最长保留 24 小时，并受 200 个文件、256 MiB 上限限制。可在声音设置查看首音时延、缓存命中和失败次数。DeepSeek 用量账本位于 DSH 用户目录的 `gsv-tts/speech-usage.sqlite`。
+- **设置持久化。** 声音设置可在运行中保存。当前 profile 的覆盖配置位于 `$DSH_HOME/profiles/<profile>/cordis.patch.yml`，默认 DSH 用户目录为 `~/.dsh`。 [完整配置定义](src/index.ts)
 
-## ❓ 常见问题
+| 常用配置键 | 作用 |
+| --- | --- |
+| `autoPlay` · `liveReply` · `interruptOnNew` | 自动朗读、生成时逐句朗读、用新回复打断当前播放。默认依次为 `false`、`false`、`true`。 |
+| `engineMode` · `apiUrl` · `installDir` | 默认使用节能模式，连接 `http://localhost:9880`，引擎目录为 `./GSV-TTS-Lite`。 |
+| `gsvSpeed` · `timeout` | GSV 合成语速默认为 `1`。常规请求超时默认为 `30000` 毫秒。 |
+| `voiceRegistryUrl` | 默认使用音色市场清单。留空只加载包内清单。 |
 
-- **装上怎么直接出声？**：默认 Edge 模式，无需任何安装，设置面板选音色即可；本地模式才需要装引擎。
-- **引擎未启动（本地模式）**：设置 → 声音设置 → 打开引擎开关（模型加载约 15~90 秒）。
-- **模型缺失**：首次启动会提示，把模型放入 `models` 目录。
-- **朗读按钮报"语音引擎未启动"**：如果你用的是本地 GSV 模式，先到声音设置启动引擎；不想装引擎就切回 Edge 云端模式。
-- **云端音色有的读不了？**：确认网络畅通；云端通道受限时可切本地 GSV。
-- **参考音频不可用**：必须是引擎服务端可访问的本地路径或 URL。
-- **DSH 0.1.x 里插件被禁用 / 启动报不兼容**：5.0.0 只支持 DSH 0.2.1-rc.2+，请升级 DSH 或改装 4.x 插件。
-- **声音设置显示"设置不可用"**：当前宿主没有提供设置服务（精简部署）；工具能力仍然可用。
+</details>
 
-## 🛠️ 技术栈
+## 遇到问题
 
-- DSH 插件框架：Cordis + `@deepseek-ai/dsh-tools` 0.2.1
-- 配置 Schema：`@deepseek-ai/schemastery`（volatile 字段 + 就地热更新）
-- 设置面板：宿主 `settings` 服务（`describe`/`update`）+ 客户端 `configForms` 服务 + `settings.section` 插槽
-- 云端 Provider：`edge-tts-universal`（微软网络音色，MP3 流）
-- 官方 Provider：DeepSeek 官方 TTS（`/v1/tools/tts`，WAV），凭据走 Harness `credentials` 服务
-- 本地引擎：GSV-TTS-Lite 0.4.7
-- 语言：TypeScript（宿主）/ 手写客户端 bundle（浏览器）/ Python（本地流式 API）
+| 现象 | 先检查什么 |
+| --- | --- |
+| 装好后找不到朗读按钮 | 插件是否装到当前 profile 并已启用，并检查 DSH 版本。 |
+| Edge 选好音色却不出声 | 在声音设置查看云端通道状态，确认联网。Edge 通道可能限流。 |
+| GSV 提示引擎未启动或模型缺失 | 用 `tts_doctor` 检查引擎、模型路径和最近一次失败，再按建议启动或补齐文件。 |
+| DeepSeek 提示凭据无效 | 确认 DSH 保存了 API Key。可以让 agent 调用 `tts_doctor` 并传入 `deep=true` 探活。 |
 
-## 📦 构建与发布
+<details>
+<summary>Agent 可调用的工具</summary>
+
+| 工具 | 用途 |
+| --- | --- |
+| `tts_speak` · `tts_list_voices` | 合成指定文本并返回音频链接，或列出当前提供方的音色。 |
+| `tts_doctor` · `tts_health_check` | 查看凭据来源、引擎、模型、日志和最近失败，或快速检查当前通道。 |
+| `tts_setup_engine` | 经用户确认后安装本地 GSV-TTS-Lite。 |
+| `tts_voice_registry` · `tts_voice_install` · `tts_voice_remove` | 浏览、安装或卸载市场音色。 |
+| `tts_lexicon_preview` | 预览文本应用发音词典后的读法。 |
+
+</details>
+
+## 参与项目
+
+有想分享的音色，欢迎投稿。碰到播放或安装问题，欢迎在 Issue 里附上 DSH 版本、所选提供方和复现步骤。觉得顺手的话，也欢迎给项目点个 Star。 [音色投稿](docs/VOICE_MARKET.md)
+
+<details>
+<summary>本地构建与发布验证</summary>
 
 ```bash
 pnpm install
-pnpm build        # 编译宿主代码（lib/）
-pnpm publish      # 发布到 npm（files: lib, scripts, cordis.patch.yml）
+pnpm clean
+pnpm build
+pnpm verify
+pnpm test
+pnpm test:release
 ```
 
-从 GitHub 安装会自动执行 `prepare` 脚本编译；`lib/client.js` 为手写客户端 bundle，随仓库发布。
+服务端用 TypeScript，浏览器脚本在 `client/`，构建产物在 `lib/`。`test:release` 会把打出的 tarball 装进真实 DSH 的临时 Web profile，验证客户端加载、音色切换和朗读下载链路，语音请求由模拟服务应答。 [发布指南](docs/PUBLISHING.md)
 
-更多发布细节见 [docs/PUBLISHING.md](docs/PUBLISHING.md)。
+界面和 Agent 工具共用同一套合成服务。
 
-## 📜 变更记录
+```mermaid
+flowchart TD
+    UI["DSH 界面 · 手动 / 自动朗读"] --> TTS["插件合成服务"]
+    Tools["DSH Agent · tts_speak"] --> TTS
+    TTS --> Providers["Edge · 本地 GSV · DeepSeek · 自定义 TTS"]
+    TTS --> Audio["经 DSH 认证的音频链接"]
+```
 
-完整更新历史见 [CHANGELOG.md](CHANGELOG.md)。
+</details>
 
-## ⚠️ 已知限制
-
-- 播放为 markdown 链接点击播放；内嵌 `<audio>` 需客户端扩展（规划中）
-- 合成音频存于系统临时目录（`%TEMP%/dsh-gsv-tts`），启动清空、会话内最多 200 个
-- Edge 云端模式依赖网络；微软限量限流时可能不可用（已有降级引导）
-- 官方语音按字符计费（约 0.3 元/千汉字），且不支持调速、音色克隆与自定义音色；自动朗读会持续产生费用
-- 官方语音需要 Harness 里已保存 `DEEPSEEK_API_KEY`（或同名环境变量）；只用账号登录、没有 API Key 时会提示补 Key
-- `tts_setup_engine` 通过 `child_process` 执行 pip/git，需环境有对应工具
-- `promptText` 留空依赖引擎 ASR 能力（能力探测），不支持时合成报错
-
-## 📄 License
-
-本项目以 **MIT 许可证** 开源发布。
-
-版权所有 © 2026 TaoruiLiu19。在软件的副本或主要部分中包含上述版权声明和本许可声明的前提下,任何人可免费复制、修改、合并、发布、分发、再授权及/或出售本软件副本。
-
-本项目按"**原样**"提供,**不附带任何明示或默示保证**。完整许可条款见 [LICENSE](LICENSE) 文件。
+[更新记录](CHANGELOG.md) · [提交 Issue](https://github.com/TaoruiLiu19/dsh-gsv/issues) · [Awesome DSH Plugin](https://awesome-dsh-plugin.com/p/TaoruiLiu19/dsh-gsv/) · [DSH Insights](https://dsh-insights.com/p/TaoruiLiu19/dsh-gsv/) · [MIT 许可证](LICENSE) · © 2026 TaoruiLiu19

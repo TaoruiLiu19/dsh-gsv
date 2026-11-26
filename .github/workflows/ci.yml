@@ -7,7 +7,10 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
 
@@ -18,8 +21,18 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - run: pnpm install --frozen-lockfile
+
+      - run: pnpm clean
 
       - run: pnpm build
 
+      - run: pnpm verify
+
       - run: pnpm test
+
+      - run: pnpm test:release

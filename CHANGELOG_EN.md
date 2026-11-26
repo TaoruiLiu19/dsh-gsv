@@ -2,6 +2,16 @@
 
 All notable changes to dsh-gsv-tts are documented in this file. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Add player speed, volume, sentence navigation, and SRT export. Native DSH capture pauses automatic speech and stops playback.
+- Connect OpenAI-compatible speech services through the shared PCM/WAV decoder. Add GSV synthesis speed, provider style instructions, and model SHA-256 manifests.
+- Add live sentence reading, audio reuse, DeepSeek auto-read budgets, and first-playback and cancellation metrics.
+- Require DSH 0.2.2-rc.1 for authenticated speech, download, and engine-control routes. Keep auto-read queues separate by session.
+- Use one launcher for managed GSV. Ask for approval before installing into an isolated Python environment, pin the upstream revision, and bind to loopback.
+- Keep the provider and voice fixed for each synthesis job and apply the lexicon once. Stream DeepSeek HTTP PCM as it arrives and cancel the upstream response when playback stops.
+- Isolate audio caches by instance, publish complete files atomically, and support byte ranges and expiry.
+
 ## [5.4.0] - 2026-11-23
 
 ### Catalog-driven providers and engines

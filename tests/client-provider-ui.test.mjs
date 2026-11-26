@@ -69,7 +69,7 @@ function runEffects() {
   }
 }
 
-function renderSection({ provider, deepseekApiKey = '' }) {
+function renderSection({ provider, deepseekApiKey = '', ...settings }) {
   fibers.clear();
   const value = {
     apiUrl: '',
@@ -85,6 +85,7 @@ function renderSection({ provider, deepseekApiKey = '' }) {
     provider,
     deepseekApiKey,
     quotaDaily: null,
+    ...settings,
   };
   const scope = {
     getSnapshot: () => ({ status: 'ready', value, writable: true, base: value }),
@@ -168,4 +169,15 @@ test('edge 模式：不出现官方 Key 输入，云端音色标签可见', () =
   const list = renderSection({ provider: 'edge' });
   assert.equal(passwordInput(list), undefined);
   assert.ok(hasText(list, 'field.cloudVoice'));
+});
+
+test('自定义模式使用自己的地址、音色和凭据引用', () => {
+  const list = renderSection({ provider: 'custom', customBaseUrl: 'http://127.0.0.1:8880/v1',
+    customKeyRef: 'CUSTOM_SPEECH', defaultVoice: 'af_sarah' });
+  assert.ok(hasText(list, 'mode.custom'));
+  const values = list.filter(node => node.type === 'input').map(node => node.props.value);
+  assert.ok(values.includes('http://127.0.0.1:8880/v1'));
+  assert.ok(values.includes('CUSTOM_SPEECH'));
+  assert.ok(values.includes('af_sarah'));
+  assert.equal(passwordInput(list), undefined);
 });

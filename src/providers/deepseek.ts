@@ -7,14 +7,11 @@ import type { ProviderChunk, ProviderHealth, TTSProvider, VoiceInfo } from '../t
  * DeepSeek 官方语音（TTS）提供方。
  *
  * 官方接口：`POST https://api.deepseek.com/v1/tools/tts`
- * - 请求体 `{ text, voice_id, format, filter_markdown }`，响应体是流式 WAV 字节；
+ * - 请求体 `{ text, voice_id, format, filter_markdown }`，优先请求流式单声道 PCM；
  * - 单次请求文本上限 10,000 计费字符（汉字算 2 个）、请求体 64 KiB；
  * - 音色只有 `stella`（海星，女声，默认）和 `tide`（暗潮，男声），不支持调速/克隆；
- * - 支持整段 HTTP 与 WebSocket 流式两种形态。本插件按句分段朗读（每段约 150 字），
- *   所以这里只用整段 HTTP：一次分段一次请求，解出 16-bit PCM 后交给服务层装 WAV。
- *
- * 与 Edge 提供方的关键差异：DeepSeek 返回的是完整 WAV 容器（带 RIFF 头），
- * 不能像 MP3 那样把多段字节直接拼起来——长文本必须解出 `data` 块再重新装头。
+ * - HTTP 响应边生成边返回，服务层将连续的 PCM 封装成一个 WAV 流。
+ * - 兼容仍返回 WAV 的网关，由提供方解析容器。
  */
 
 export const DEEPSEEK_BASE_URL = 'https://api.deepseek.com';
@@ -153,8 +150,7 @@ export class DeepseekProvider implements TTSProvider {
    * 2. Harness 凭据服务按引用名解析（默认 DEEPSEEK_API_KEY）——与模型鉴权同一份 Key；
    * 3. 同名环境变量（凭据服务缺失 / 解析失败时的兜底）。
    */
-  async apiKey(): Promise<string> {
-    const cfg = this.opts.getConfig();
+  async apiKey(cfg = this.opts.getConfig()): Promise<string> {
     const manual = String(cfg.deepseekApiKey ?? '').trim();
     if (manual) return manual;
 
@@ -264,38 +260,34 @@ export class DeepseekProvider implements TTSProvider {
     }
   }
 
-  async *stream(text: string, voice: string, signal?: AbortSignal): AsyncIterable<ProviderChunk> {
+  async *stream(text: string, voice: string, signal?: AbortSignal, cfg = this.opts.getConfig(),
+    beforeRequest?: (part: string) => void): AsyncIterable<ProviderChunk> {
     const voiceId = isValidVoiceId('deepseek', voice) ? voice : defaultVoiceFor('deepseek');
     const parts = splitIntoSegments(text, DEEPSEEK_CHUNK_CHARS, 0);
     if (parts.length === 0) throw new Error('没有可合成的文本');
+    const key = await this.apiKey(cfg);
 
     let totalDuration = 0;
     for (const part of parts) {
-      const wav = await this.requestWav(part, voiceId, signal);
-      const info = parseWav(wav);
-      if (!info) throw new Error('DeepSeek 返回的音频不是可解析的 WAV');
-      if (info.bits !== 16) throw new Error(`DeepSeek 返回 ${info.bits}-bit WAV，暂不支持该位深`);
-      totalDuration += wavDuration(info);
-      // 逐块吐 16-bit PCM，由调用方决定落盘方式：短文本装 WAV，长文本边收边写文件
-      if (info.data.length > 0) {
-        yield { mime: 'audio/pcm-s16', data: info.data, sampleRate: info.sampleRate };
+      signal?.throwIfAborted();
+      if (key) beforeRequest?.(part);
+      for await (const chunk of this.requestAudio(part, voiceId, key, cfg.timeout, signal)) {
+        totalDuration += chunk.data.length / (chunk.sampleRate * 2);
+        yield chunk;
       }
     }
 
     yield { mime: 'audio/meta', data: new Uint8Array(0), totalDuration };
   }
 
-  /** 单次官方 TTS 请求，返回完整 WAV 字节。 */
-  private async requestWav(text: string, voiceId: string, signal?: AbortSignal): Promise<Buffer> {
-    const key = await this.apiKey();
+  private async *requestAudio(text: string, voiceId: string, key: string, timeout: number | undefined, signal?: AbortSignal): AsyncGenerator<ProviderChunk & { sampleRate: number }> {
     if (!key) {
       throw new Error(
         '未找到 DeepSeek 凭据：在 Harness 设置里保存 DEEPSEEK_API_KEY 即可自动复用（本插件默认读取该引用名），' +
           '也可手填 Key 或导出同名环境变量',
       );
     }
-    const cfg = this.opts.getConfig();
-    const timeoutMs = Math.max(Number(cfg.timeout) || 0, MIN_REQUEST_TIMEOUT_MS);
+    const timeoutMs = Math.max(Number(timeout) || 0, MIN_REQUEST_TIMEOUT_MS);
 
     const combined = signal
       ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)])
@@ -312,11 +304,12 @@ export class DeepseekProvider implements TTSProvider {
         body: JSON.stringify({
           text,
           voice_id: voiceId,
-          format: 'wav',
+          format: 'pcm',
           // 插件侧已做 Markdown 清洗，避免官方再处理一遍把正常文本改坏
           filter_markdown: false,
         }),
         signal: combined,
+        redirect: 'error',
       });
     } catch (e) {
       if (combined.aborted) throw new Error(`DeepSeek TTS 请求超时或已取消（${timeoutMs}ms）`);
@@ -338,8 +331,51 @@ export class DeepseekProvider implements TTSProvider {
       throw new Error(`DeepSeek TTS 失败（${resp.status}${hint ? `：${hint}` : ''}）${detail ? ` ${detail.slice(0, 200)}` : ''}`);
     }
 
-    const buf = Buffer.from(await resp.arrayBuffer());
-    if (buf.length === 0) throw new Error('DeepSeek TTS 未返回音频数据');
-    return buf;
+    yield* readSpeechAudio(resp, combined);
+  }
+}
+
+/** Shared decoder for DeepSeek and OpenAI-compatible PCM/WAV speech responses. */
+export async function* readSpeechAudio(
+  resp: Response, combined: AbortSignal, format = 'pcm',
+): AsyncGenerator<ProviderChunk & { sampleRate: number }> {
+  const mime = (resp.headers.get('content-type') ?? '').split(';')[0].toLowerCase();
+  if (['audio/wav', 'audio/wave', 'audio/x-wav'].includes(mime) || (format === 'wav' && (!mime || mime === 'application/octet-stream'))) {
+    const info = parseWav(Buffer.from(await resp.arrayBuffer()));
+    if (!info || info.bits !== 16 || info.channels !== 1 || !info.data.length || info.data.length % 2) {
+      throw new Error('语音服务返回了无效的单声道 16-bit WAV');
+    }
+    yield { mime: 'audio/pcm-s16', data: info.data, sampleRate: info.sampleRate };
+    return;
+  }
+  if (mime && !['application/octet-stream', 'audio/pcm', 'audio/x-pcm'].includes(mime)) {
+    throw new Error('语音服务返回了不支持的音频格式');
+  }
+  if (!resp.body) throw new Error('语音服务未返回音频数据');
+  const reader = resp.body.getReader();
+  const cancel = () => { void reader.cancel(combined.reason).catch(() => {}); };
+  combined.addEventListener('abort', cancel, { once: true });
+  let carry: number | undefined;
+  let hasAudio = false;
+  try {
+    combined.throwIfAborted();
+    while (true) {
+      const { done, value } = await reader.read();
+      combined.throwIfAborted();
+      if (done) break;
+      if (!value.length) continue;
+      const bytes = carry === undefined ? value : Buffer.concat([Buffer.from([carry]), value]);
+      const length = bytes.length - bytes.length % 2;
+      carry = length < bytes.length ? bytes[length] : undefined;
+      if (length) {
+        hasAudio = true;
+        yield { mime: 'audio/pcm-s16', data: bytes.subarray(0, length), sampleRate: 24000 };
+      }
+    }
+    if (!hasAudio || carry !== undefined) throw new Error('语音服务返回了空或截断的 PCM 音频');
+  } finally {
+    combined.removeEventListener('abort', cancel);
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
 }

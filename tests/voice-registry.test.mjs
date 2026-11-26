@@ -4,10 +4,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { validateManifest, VoiceRegistryManager, fetchRetry, resolveBundledFile, MAX_FILE_BYTES } from '../lib/voice-registry.js';
+import { validateManifest, VoiceRegistryManager, fetchRetry, resolveBundledFile, MAX_FILE_BYTES, MAX_MANIFEST_BYTES } from '../lib/voice-registry.js';
 import { VoiceManager } from '../lib/voice-manager.js';
 
 const sha = (b) => createHash('sha256').update(b).digest('hex');
@@ -29,8 +29,23 @@ const makePkg = (over = {}) => ({
 
 const makeManifest = (voices, over = {}) => ({ schema: 1, version: '1.0.0', trusted: true, voices, ...over });
 
+function oversizedResponse(limit) {
+  const chunk = new Uint8Array(128 * 1024);
+  const state = { pulled: 0, cancelled: false };
+  const response = new Response(new ReadableStream({
+    pull(controller) {
+      state.pulled += chunk.length;
+      if (state.pulled > limit * 2) controller.close();
+      else controller.enqueue(chunk);
+    },
+    cancel() { state.cancelled = true; },
+  }));
+  return { response, state };
+}
+
 function makeBaseConfig(installDir) {
   return {
+    provider: 'gsv',
     apiUrl: 'http://localhost:9880',
     voices: [],
     defaultVoice: '',
@@ -228,6 +243,55 @@ test('安装失败：后缀不在白名单 → 不下载', async () => {
 });
 
 // ─── 卸载 ───
+test('无 Content-Length 的超大清单和音频在读到上限时取消下载', async () => {
+  const config = makeBaseConfig(freshInstallDir());
+  config.voiceRegistryUrl = 'https://example.com/voices.json';
+  const manifest = oversizedResponse(MAX_MANIFEST_BYTES);
+  const audio = oversizedResponse(MAX_FILE_BYTES);
+  let requestCount = 0;
+  const manager = new VoiceRegistryManager({
+    getConfig: () => config,
+    writeConfig: async () => assert.fail('超限数据不应写入设置'),
+    fetch: async url => {
+      if (url === config.voiceRegistryUrl) {
+        if (requestCount++ === 0) return manifest.response;
+        return Response.json(makeManifest([makePkg()]));
+      }
+      assert.ok(url.endsWith('s.wav'));
+      return audio.response;
+    },
+  });
+  await assert.rejects(manager.list(), /清单超限/);
+  assert.match((await manager.install('test-voice', true)).message, /speaker 文件超限/);
+  for (const fixture of [manifest, audio]) assert.equal(fixture.state.cancelled, true);
+  assert.ok(manifest.state.pulled < 2 * MAX_MANIFEST_BYTES);
+  assert.ok(audio.state.pulled < 2 * MAX_FILE_BYTES);
+  assert.deepEqual(readdirSync(join(config.installDir, 'voices')), []);
+});
+
+test('替换音色时设置保存失败，旧音色文件和引用仍可用', async () => {
+  const config = makeBaseConfig(freshInstallDir());
+  config.voiceRegistryUrl = 'https://example.com/voices.json';
+  let refuseWrite = false;
+  const manager = new VoiceRegistryManager({
+    getConfig: () => config,
+    writeConfig: async patch => {
+      if (refuseWrite) throw new Error('settings write failed');
+      Object.assign(config, patch);
+    },
+    fetch: async url => url === config.voiceRegistryUrl ? Response.json(makeManifest([makePkg()]))
+      : new Response(url.endsWith('s.wav') ? speakerData : promptData),
+  });
+  const first = await manager.install('test-voice', true);
+  assert.equal(first.ok, true, first.message);
+  refuseWrite = true;
+  assert.match((await manager.install('test-voice', true)).message, /settings write failed/);
+  assert.deepEqual(config.voices, [first.voice]);
+  assert.deepEqual(readFileSync(first.voice.speakerAudioPath), speakerData);
+  assert.deepEqual(readFileSync(first.voice.promptAudioPath), promptData);
+  assert.equal(readdirSync(join(config.installDir, 'voices', 'test-voice')).length, 1);
+});
+
 test('卸载：source=user 拒绝删（即使 id 命中）', async () => {
   const config = makeBaseConfig(freshInstallDir());
   config.voices = [{ name: 'my', speakerAudioPath: 'a', promptAudioPath: 'b', promptText: '', id: 'my-voice', source: 'user' }];
@@ -248,6 +312,7 @@ test('卸载：registry 音色按 id 删 + defaultVoice 一并清空 + deleteFil
     { name: 'keep', speakerAudioPath: 'k', promptAudioPath: 'k', promptText: '', id: '', source: 'user' },
   ];
   config.defaultVoice = 'Test Voice';
+  config.voiceByProvider = { gsv: 'Test Voice', edge: 'en-US-JennyNeural' };
   const writeLog = [];
   const mgr = makeManager({ config, fetchers: {}, writeLog });
 
@@ -256,6 +321,7 @@ test('卸载：registry 音色按 id 删 + defaultVoice 一并清空 + deleteFil
   assert.equal(r.ok, true);
   assert.ok(existsSync(voiceDir), 'deleteFiles=false 应保留文件');
   assert.equal(config.defaultVoice, '', 'defaultVoice 应清空');
+  assert.deepEqual(config.voiceByProvider, { gsv: '', edge: 'en-US-JennyNeural' });
   assert.deepEqual(config.voices.map((v) => v.name), ['keep']);
 
   // 重新装回再删，deleteFiles=true：文件删除

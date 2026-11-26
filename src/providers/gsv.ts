@@ -14,6 +14,7 @@ export class GsvProvider implements TTSProvider {
       voiceManager?: VoiceManager;
       /** 引擎状态探测（index.ts 接入 engineManager.status） */
       health?: () => Promise<ProviderHealth>;
+      headers?: (apiUrl: string) => Record<string, string>;
     },
   ) {}
 
@@ -33,9 +34,10 @@ export class GsvProvider implements TTSProvider {
     if (!preset.speakerAudioPath || !preset.promptAudioPath) return false;
     const cfg = this.opts.getConfig();
     try {
-      const resp = await fetch(`${cfg.apiUrl}/warmup`, {
+      const resp = await fetch(`${cfg.apiUrl.replace(/\/$/, '')}/warmup`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.opts.headers?.(cfg.apiUrl) },
+        redirect: 'error',
         body: JSON.stringify({
           speaker_audio: preset.speakerAudioPath,
           prompt_audio: preset.promptAudioPath,
@@ -61,42 +63,35 @@ export class GsvProvider implements TTSProvider {
     text: string,
     voice: VoicePreset,
     signal?: AbortSignal,
-    opts?: { timeoutMs?: number },
+    opts?: { timeoutMs?: number; config?: Config; captions?: boolean },
   ): AsyncIterable<ProviderChunk> {
     if (!voice.speakerAudioPath) throw new Error(`音色 "${voice.name}" 缺少 speakerAudioPath（参考音频路径）`);
     if (!voice.promptAudioPath) throw new Error(`音色 "${voice.name}" 缺少 promptAudioPath（提示音频路径）`);
     // promptText 留空时交给服务端：引擎支持 ASR 则自动转写，否则返回明确错误
 
-    const cfg = this.opts.getConfig();
+    const cfg = opts?.config ?? this.opts.getConfig();
     const body = {
       text,
       speaker_audio: voice.speakerAudioPath,
       prompt_audio: voice.promptAudioPath,
       prompt_text: voice.promptText,
-      speed: 1.0,
+      speed: cfg.gsvSpeed ?? 1,
       stream_chunk: 25,
+      return_subtitles: opts?.captions ?? false,
     };
 
     // 合并调用方取消信号与超时信号（timeoutMs=0 表示由调用方自行控制，不设超时）
     const timeoutMs = opts?.timeoutMs ?? cfg.timeout;
-    const timeoutSignal = timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : null;
-    const ac = new AbortController();
-    const forward = () => ac.abort(new DOMException('aborted', 'AbortError'));
-    signal?.addEventListener('abort', forward, { once: true });
-    timeoutSignal?.addEventListener('abort', forward, { once: true });
+    const signals = [signal, timeoutMs > 0 ? AbortSignal.timeout(timeoutMs) : undefined];
+    const operation = AbortSignal.any(signals.filter((item): item is AbortSignal => Boolean(item)));
 
-    let resp: Response;
-    try {
-      resp = await fetch(`${cfg.apiUrl}/tts/stream`, {
+    const resp = await fetch(`${cfg.apiUrl.replace(/\/$/, '')}/tts/stream`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...this.opts.headers?.(cfg.apiUrl) },
         body: JSON.stringify(body),
-        signal: ac.signal,
+        redirect: 'error',
+        signal: operation,
       });
-    } finally {
-      signal?.removeEventListener('abort', forward);
-      timeoutSignal?.removeEventListener('abort', forward);
-    }
 
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '');
@@ -107,6 +102,7 @@ export class GsvProvider implements TTSProvider {
     let currentEvent = '';
     let buffer = '';
     let totalDuration = 0;
+    let completed = false;
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
 
@@ -138,23 +134,27 @@ export class GsvProvider implements TTSProvider {
                   mime: 'audio/pcm-f32',
                   data: Buffer.from(audio, 'base64'),
                   sampleRate,
+                  cues: Array.isArray(data.subtitles) ? data.subtitles.flatMap(cue =>
+                    typeof cue?.text === 'string' && typeof cue?.start_s === 'number' && typeof cue?.end_s === 'number' &&
+                    cue.end_s > cue.start_s ? [{ text: cue.text, start: cue.start_s, end: cue.end_s }] : []) : undefined,
                 };
               }
             } else if (currentEvent === 'done') {
               totalDuration = Number(data.total_duration) || 0;
+              completed = true;
             } else if (currentEvent === 'error') {
               throw new Error('API 错误: ' + String(data.error ?? '未知错误'));
             }
           }
         }
       }
-    } catch (e) {
-      if (ac.signal.aborted && !(e instanceof Error && e.message.startsWith('API 错误'))) {
-        throw new Error('TTS 请求被取消或超时（' + cfg.timeout + 'ms）');
-      }
-      throw e;
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
 
+    operation.throwIfAborted();
+    if (!completed) throw new Error('GSV 音频流提前结束');
     // 携带总时长收尾
     yield { mime: 'audio/meta', data: new Uint8Array(0), totalDuration };
   }

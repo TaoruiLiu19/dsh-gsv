@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { basename, extname, join, resolve, sep } from 'node:path';
-import { tmpdir } from 'node:os';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { fileURLToPath } from 'node:url';
 import type { Config, VoicePreset, VoiceRegistry, VoiceRegistryPkg } from './types.js';
 
 /** 单文件下载硬上限（独立于清单声明，防超限）。 */
 export const MAX_FILE_BYTES = 50 * 1024 * 1024;
+export const MAX_MANIFEST_BYTES = 1024 * 1024;
 /** 允许的音频后缀白名单。 */
 export const ALLOWED_EXT = ['.wav', '.mp3', '.ogg', '.flac', '.m4a'];
 /** 音色 id 白名单。 */
@@ -81,6 +83,45 @@ export function resolveBundledFile(url: string): string | null {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function bounded(label: string, limit: number, hash?: ReturnType<typeof createHash>): Transform {
+  let size = 0;
+  return new Transform({
+    transform(chunk: Buffer, _encoding, done) {
+      size += chunk.byteLength;
+      if (size > limit) return done(new Error(label + '超限（' + size + ' > ' + limit + ' 字节）'));
+      hash?.update(chunk);
+      done(null, chunk);
+    },
+    flush(done) { done(size ? undefined : new Error(label + '为空')); },
+  });
+}
+
+function httpsUrl(value: string | URL, base?: URL): URL {
+  const url = new URL(value, base);
+  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('仅允许不含凭据的 HTTPS 地址');
+  return url;
+}
+
+async function responseStream(response: Response, label: string, limit: number): Promise<Readable> {
+  const size = Number(response.headers.get('content-length'));
+  if (!response.ok || size > limit || !response.body) {
+    await response.body?.cancel().catch(() => {});
+    if (!response.ok) throw new Error(label + '拉取失败: HTTP ' + response.status);
+    if (size > limit) throw new Error(label + '超限（' + size + ' > ' + limit + ' 字节）');
+    throw new Error(label + '为空');
+  }
+  return Readable.from(response.body as unknown as AsyncIterable<Uint8Array>);
+}
+
+async function manifestText(source: Readable): Promise<string> {
+  let text = '';
+  const decoder = new TextDecoder();
+  await pipeline(source, bounded('清单', MAX_MANIFEST_BYTES), async (chunks) => {
+    for await (const chunk of chunks) text += decoder.decode(chunk, { stream: true });
+  });
+  return text + decoder.decode();
+}
 
 /**
  * 网络层重试：仅当 fetch 抛异常（连接/TLS/超时等抖动）时重试，最多 attempts 次；
@@ -163,47 +204,37 @@ export function validateManifest(raw: unknown): VoiceRegistry {
  * - 合并逻辑：以 id 为键，包内优先（保留 trusted 状态），远端只补充新 id。
  */
 export class VoiceRegistryManager {
+  private mutations: Promise<unknown> = Promise.resolve();
+
   constructor(
     private opts: {
       getConfig: () => Config;
       /** 持久化配置补丁（settings.update(ns, patch)），volatile 配置就地热更新 */
       writeConfig: (patch: Partial<Config>) => Promise<void>;
       fetchers?: Partial<RegistryFetchers>;
+      fetch?: typeof fetch;
     },
   ) {}
 
-  private fetchers(): RegistryFetchers {
-    const f = this.opts.fetchers ?? {};
-    return {
-      fetchText:
-        f.fetchText ??
-        (async (url) => {
-          const resp = await fetchRetry(
-            (u) => fetch(u, { headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(20000) }),
-            url,
-          );
-          if (!resp.ok) throw new Error(`清单拉取失败: HTTP ${resp.status}`);
-          return resp.text();
-        }),
-      fetchBinary:
-        f.fetchBinary ??
-        (async (url) => {
-          if (!url.startsWith('https://')) throw new Error('仅允许 https:// 直链');
-          let resp: Response;
-          try {
-            resp = await fetchRetry((u) => fetch(u, { signal: AbortSignal.timeout(60000) }), url);
-          } catch (e) {
-            // 网络/TLS 抖动重试后仍失败：给出 URL 与具体原因（避免裸 "fetch failed"）
-            const detail = ((e as { cause?: { code?: string } })?.cause?.code) ?? (e as Error)?.message ?? e;
-            throw new Error(`音频下载失败（已重试）: ${url} — ${String(detail)}`);
-          }
-          if (!resp.ok) throw new Error(`音频下载失败: HTTP ${resp.status}（${url}）`);
-          const buf = Buffer.from(await resp.arrayBuffer());
-          if (buf.length === 0) throw new Error('下载内容为空');
-          if (buf.length > MAX_FILE_BYTES) throw new Error(`文件超限（${buf.length} > ${MAX_FILE_BYTES} 字节）`);
-          return buf;
-        }),
-    };
+  private serialize<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.mutations.then(operation);
+    this.mutations = result.catch(() => {});
+    return result;
+  }
+
+  private async remoteStream(url: string, label: string, limit: number, timeout: number): Promise<Readable> {
+    const request = this.opts.fetch ?? fetch;
+    let target = httpsUrl(url);
+    for (let redirects = 0; redirects <= 5; redirects++) {
+      const response = await fetchRetry(u => request(u, {
+        headers: { 'Cache-Control': 'no-cache' }, signal: AbortSignal.timeout(timeout), redirect: 'manual',
+      }), target.href);
+      const next = [301, 302, 303, 307, 308].includes(response.status) && response.headers.get('location');
+      if (!next) return responseStream(response, label, limit);
+      await response.body?.cancel().catch(() => {});
+      target = httpsUrl(next, target);
+    }
+    throw new Error(label + '重定向次数过多');
   }
 
   /**
@@ -220,12 +251,8 @@ export class VoiceRegistryManager {
   }> {
     // 始终加载包内清单
     const bundledPath = bundledManifestPath();
-    let bundledText: string;
-    try {
-      bundledText = readFileSync(bundledPath, 'utf8');
-    } catch {
-      throw new Error(`包内清单缺失: ${bundledPath}`);
-    }
+    if (!existsSync(bundledPath)) throw new Error('包内清单缺失: ' + bundledPath);
+    const bundledText = await manifestText(createReadStream(bundledPath));
     const bundledManifest = validateManifest(JSON.parse(bundledText));
     const bundledIds = new Set(bundledManifest.voices.map((v) => v.id));
 
@@ -235,7 +262,10 @@ export class VoiceRegistryManager {
     }
 
     if (!url.startsWith('https://')) throw new Error('voiceRegistryUrl 必须为 https:// 地址');
-    const remoteText = await this.fetchers().fetchText(url);
+    const injected = this.opts.fetchers?.fetchText;
+    const source = injected ? Readable.from([Buffer.from(await injected(url))])
+      : await this.remoteStream(url, '清单', MAX_MANIFEST_BYTES, 20000);
+    const remoteText = await manifestText(source);
     const remoteManifest = validateManifest(JSON.parse(remoteText));
 
     // A+ 合并：包内音色优先（trusted），远端只补充包内未收录的新 id
@@ -269,7 +299,11 @@ export class VoiceRegistryManager {
    * - 需确认时第一段返回 needsConfirm，不下载任何字节；
    * - confirm 后才下载 → sha256 校验 → 原子落盘 → 写 Config.voices。
    */
-  async install(id: string, confirm: boolean): Promise<RegistryInstallResult> {
+  install(id: string, confirm: boolean): Promise<RegistryInstallResult> {
+    return this.serialize(() => this.installVoice(id, confirm));
+  }
+
+  private async installVoice(id: string, confirm: boolean): Promise<RegistryInstallResult> {
     const { manifest, bundledIds } = await this.resolveRegistry();
     const pkg = manifest.voices.find((v) => v.id === id);
     if (!pkg) return { ok: false, message: `清单中不存在音色 "${id}"` };
@@ -279,25 +313,43 @@ export class VoiceRegistryManager {
       return { ok: false, needsConfirm: true, pkg, message: `该音色来自远端清单（包内未收录），需要确认后安装` };
     }
 
-    const tmpBase = mkdtempSync(join(tmpdir(), 'dsh-gsv-registry-'));
+    let staging: string | undefined;
+    let published: string | undefined;
     try {
-      const staged = await this.stage(pkg, tmpBase);
+      const dir = this.voiceDir(pkg.id);
+      const base = resolve(dir, '..');
+      mkdirSync(base, { recursive: true });
+      staging = mkdtempSync(join(base, '.stage-'));
+      const files = await this.stage(pkg, staging, bundledIds.has(id));
+      mkdirSync(dir, { recursive: true });
+      const revision = join(dir, 'revision-' + basename(staging).slice('.stage-'.length));
+      renameSync(staging, revision);
+      published = revision;
+      const voice: VoicePreset = {
+        name: pkg.name, id: pkg.id, source: 'registry', promptText: pkg.promptText,
+        speakerAudioPath: join(revision, files.speaker), promptAudioPath: join(revision, files.prompt),
+      };
       const cfg = this.opts.getConfig();
       const next = [
         ...cfg.voices.filter((v) => !(v.source === 'registry' && v.id === pkg.id)),
-        staged.voice,
+        voice,
       ];
       await this.opts.writeConfig({ voices: next });
-      return { ok: true, pkg, voice: staged.voice, message: `已安装音色 "${pkg.name}"` };
+      return { ok: true, pkg, voice, message: '已安装音色 "' + pkg.name + '"' };
     } catch (e) {
+      if (published) rmSync(published, { recursive: true, force: true });
       return { ok: false, message: String((e as Error)?.message ?? e) };
     } finally {
-      rmSync(tmpBase, { recursive: true, force: true });
+      if (staging) rmSync(staging, { recursive: true, force: true });
     }
   }
 
   /** 卸载：仅限 source:'registry'，按 id 精确匹配；defaultVoice 悬空一并清空；deleteFiles 限定在 voices 目录内。 */
-  async remove(id: string, deleteFiles: boolean): Promise<RegistryRemoveResult> {
+  remove(id: string, deleteFiles: boolean): Promise<RegistryRemoveResult> {
+    return this.serialize(() => this.removeVoice(id, deleteFiles));
+  }
+
+  private async removeVoice(id: string, deleteFiles: boolean): Promise<RegistryRemoveResult> {
     const cfg = this.opts.getConfig();
     const voice = cfg.voices.find((v) => v.id === id);
     if (!voice) return { ok: false, message: `未安装音色 "${id}"` };
@@ -306,7 +358,10 @@ export class VoiceRegistryManager {
     }
     const next = cfg.voices.filter((v) => !(v.id === id && v.source === 'registry'));
     const patch: Partial<Config> = { voices: next };
-    if (cfg.defaultVoice === voice.name) patch.defaultVoice = ''; // 防悬空
+    if (cfg.voiceByProvider?.gsv === voice.name) {
+      patch.voiceByProvider = { ...cfg.voiceByProvider, gsv: '' };
+    }
+    if (cfg.provider === 'gsv' && cfg.defaultVoice === voice.name) patch.defaultVoice = '';
     await this.opts.writeConfig(patch);
     if (deleteFiles) {
       const dir = this.voiceDir(id);
@@ -315,73 +370,30 @@ export class VoiceRegistryManager {
     return { ok: true, message: `已卸载音色 "${voice.name}"` };
   }
 
-  /** 下载 → sha256 校验 → 原子落盘；返回可写回 Config 的 VoicePreset。 */
-  private async stage(pkg: VoiceRegistryPkg, tmpBase: string): Promise<{ voice: VoicePreset }> {
-    const extOf = (url: string) => {
-      try {
-        return extname(new URL(url).pathname).toLowerCase();
-      } catch {
-        return '';
+  private async stage(pkg: VoiceRegistryPkg, staging: string, bundled: boolean) {
+    const filename = (part: 'speaker' | 'prompt') => {
+      const extension = extname(new URL(pkg[part]).pathname).toLowerCase();
+      if (!ALLOWED_EXT.includes(extension)) throw new Error(part + ' 后缀不允许: ' + (extension || '(无)'));
+      return part + extension;
+    };
+    const files = { speaker: filename('speaker'), prompt: filename('prompt') };
+    for (const part of ['speaker', 'prompt'] as const) {
+      const url = pkg[part];
+      const local = bundled ? resolveBundledFile(url) : null;
+      const injected = this.opts.fetchers?.fetchBinary;
+      const source = local ? createReadStream(local)
+        : injected ? Readable.from([await injected(url)])
+        : await this.remoteStream(url, part + ' 文件', MAX_FILE_BYTES, 60000);
+      const hash = createHash('sha256');
+      await pipeline(source, bounded(part + ' 文件', MAX_FILE_BYTES, hash),
+        createWriteStream(join(staging, files[part]), { flags: 'wx' }));
+      const actual = hash.digest('hex');
+      const expected = pkg.sha256[part];
+      if (actual !== expected) {
+        throw new Error(part + ' sha256 校验失败（期望 ' + expected.slice(0, 12) + '…，实际 ' + actual.slice(0, 12) + '…）');
       }
-    };
-    const speakerExt = extOf(pkg.speaker);
-    const promptExt = extOf(pkg.prompt);
-    if (!ALLOWED_EXT.includes(speakerExt)) throw new Error(`speaker 后缀不允许: ${speakerExt || '(无)'}`);
-    if (!ALLOWED_EXT.includes(promptExt)) throw new Error(`prompt 后缀不允许: ${promptExt || '(无)'}`);
-
-    const fetchers = this.fetchers();
-    // 两个文件都先落临时目录并各自校验，全部通过才提交（原子）
-    // 包内素材（docs/voices/ 已有同名文件）直接本地读取，离线安装、不依赖 CDN
-    const readSpeaker = () => {
-      const local = resolveBundledFile(pkg.speaker);
-      return local ? readFileSync(local) : fetchers.fetchBinary(pkg.speaker);
-    };
-    const readPrompt = () => {
-      const local = resolveBundledFile(pkg.prompt);
-      return local ? readFileSync(local) : fetchers.fetchBinary(pkg.prompt);
-    };
-    const [speakerData, promptData] = await Promise.all([readSpeaker(), readPrompt()]);
-
-    // 大小硬上限在 stage 层强制执行（不依赖 fetcher 实现），默认 fetcher 里的检查只是提前止损
-    if (speakerData.length > MAX_FILE_BYTES) throw new Error(`speaker 文件超限（${speakerData.length} > ${MAX_FILE_BYTES} 字节）`);
-    if (promptData.length > MAX_FILE_BYTES) throw new Error(`prompt 文件超限（${promptData.length} > ${MAX_FILE_BYTES} 字节）`);
-
-    const hash = (b: Buffer) => createHash('sha256').update(b).digest('hex');
-    const speakerSha = hash(speakerData);
-    const promptSha = hash(promptData);
-    if (speakerSha !== pkg.sha256.speaker) {
-      throw new Error(`speaker sha256 校验失败（期望 ${pkg.sha256.speaker.slice(0, 12)}…，实际 ${speakerSha.slice(0, 12)}…）`);
     }
-    if (promptSha !== pkg.sha256.prompt) {
-      throw new Error(`prompt sha256 校验失败（期望 ${pkg.sha256.prompt.slice(0, 12)}…，实际 ${promptSha.slice(0, 12)}…）`);
-    }
-
-    const dir = this.voiceDir(pkg.id);
-    const speakerFile = join(tmpBase, `speaker${speakerExt}`);
-    const promptFile = join(tmpBase, `prompt${promptExt}`);
-    writeFileSync(speakerFile, speakerData);
-    writeFileSync(promptFile, promptData);
-
-    // 提交：建目录 + 双文件拷入（临时目录在系统盘、installDir 可能在其他盘，
-    // rename 跨卷会 EXDEV，故用 copyFileSync；先写全并校验才提交，失败回滚整个目录）
-    mkdirSync(dir, { recursive: true });
-    try {
-      copyFileSync(speakerFile, join(dir, `speaker${speakerExt}`));
-      copyFileSync(promptFile, join(dir, `prompt${promptExt}`));
-    } catch (e) {
-      rmSync(dir, { recursive: true, force: true });
-      throw e;
-    }
-    return {
-      voice: {
-        name: pkg.name,
-        speakerAudioPath: join(dir, `speaker${speakerExt}`),
-        promptAudioPath: join(dir, `prompt${promptExt}`),
-        promptText: pkg.promptText,
-        id: pkg.id,
-        source: 'registry',
-      },
-    };
+    return files;
   }
 
   /** 安装/删除目录：resolve 后必须仍位于 <installDir>/voices/ 之下。 */

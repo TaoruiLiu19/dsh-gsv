@@ -29,7 +29,7 @@ test('synthesizeFullWav：流式 PCM 写成一个完整 WAV', async () => {
   assert.equal(r.parts, 1);
   assert.ok(Math.abs(r.duration - 1) < 0.01, `duration ${r.duration}`);
   assert.equal(r.bytes, 44 + 32000 * 2);
-  const file = join(store.directory, r.audioUrl.split('/').pop());
+  const file = join(store.directory, new URL(r.audioUrl, 'http://host').searchParams.get('file'));
   const buf = readFileSync(file);
   assert.equal(buf.length, r.bytes);
   assert.equal(buf.readUInt32LE(4), 36 + 32000 * 2);
