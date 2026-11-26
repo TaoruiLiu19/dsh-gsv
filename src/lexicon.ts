@@ -31,7 +31,7 @@ export interface LexiconEntry {
   scope: LexiconScope;
 }
 
-const SCOPES = new Set<string>(['all', 'edge', 'deepseek', 'gsv']);
+const SCOPES = new Set<string>(['all', 'edge', 'deepseek', 'gsv', 'custom']);
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

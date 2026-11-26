@@ -69,7 +69,7 @@ test('DeepseekProvider.stream：单段请求 → 16-bit PCM 块 + 结束元数�
   assert.equal(call.url, 'https://api.deepseek.com/v1/tools/tts');
   assert.equal(call.headers.Authorization, 'Bearer sk-test');
   assert.equal(call.body.voice_id, 'tide');
-  assert.equal(call.body.format, 'wav');
+  assert.equal(call.body.format, 'pcm');
   assert.equal(call.body.filter_markdown, false);
   assert.equal(call.body.text, '你好，世界');
 });
@@ -230,7 +230,7 @@ test('TTSService.synthesizeLongWav：允许超过 6000 字（/speak/full 用）�
   assert.equal(fetchImpl.calls.length, 4, '8000 字切成 4 个 2000 字请求');
   assert.ok(r.duration > 0);
   assert.ok(r.bytes > 44);
-  const file = join(store.directory, String(r.audioUrl).split('/').pop());
+  const file = join(store.directory, new URL(r.audioUrl, 'http://host').searchParams.get('file'));
   const saved = readFileSync(file);
   assert.equal(saved.length, r.bytes);
   assert.equal(saved.toString('ascii', 0, 4), 'RIFF');

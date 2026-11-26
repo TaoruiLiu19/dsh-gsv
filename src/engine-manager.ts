@@ -1,150 +1,185 @@
-import { execFileSync, spawn } from 'child_process';
-import type { ChildProcess } from 'child_process';
-import { existsSync, openSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { once } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
+import { GSV_ENGINE } from './catalog.js';
+import { verifyModelManifest } from './model-manifest.js';
 
-/**
- * GSV-TTS-Lite 引擎进程管理：启动（detached，宿主退出后仍存活）、停止、状态查询。
- * 单个实例跨配置热更新存活，避免 reconfigure 丢失子进程引用。
- */
+export interface EngineConfig {
+  apiUrl: string;
+  installDir: string;
+  gsvModelManifest?: string;
+}
+
 export interface EngineStatus {
   running: boolean;
   port: number;
   message?: string;
 }
 
-export interface EngineActionResult {
+export interface EngineActionResult extends EngineStatus {
   ok: boolean;
-  running: boolean;
   message: string;
 }
 
-interface PythonCmd {
-  bin: string;
-  prefix: string[];
+const SCRIPT = fileURLToPath(new URL(`../${GSV_ENGINE.startScript}`, import.meta.url));
+
+export function enginePaths(directory: string) {
+  const root = resolve(directory);
+  const source = join(root, 'engine-source');
+  const venv = join(root, '.venv');
+  const modelDirs = [join(root, 'models'), join(root, 'API', 'models'), join(source, 'models')];
+  return {
+    root,
+    source,
+    venv,
+    python: process.platform === 'win32' ? join(venv, 'Scripts', 'python.exe') : join(venv, 'bin', 'python'),
+    models: modelDirs.find(path => existsSync(path)) ?? modelDirs[0],
+    log: join(root, 'logs', 'engine.log'),
+  };
+}
+
+function managedPort(value: string): number {
+  const url = new URL(value);
+  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname)
+    || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('托管引擎只支持本机 HTTP 端口。外部引擎请独立管理。');
+  }
+  return url.port ? Number(url.port) : 80;
 }
 
 export class EngineManager {
-  private child: ChildProcess | null = null;
-  private apiUrl = 'http://localhost:9880';
-  private installDir = './GSV-TTS-Lite';
+  private child: { process: ChildProcess; port: number; token: string } | undefined;
+  private operation: { promise: Promise<EngineActionResult>; cancel: AbortController } | undefined;
+  private readonly lifetime = new AbortController();
 
-  /** 配置热更新时同步（进程引用保留）。 */
-  configure(apiUrl: string, installDir: string): void {
-    this.apiUrl = apiUrl;
-    this.installDir = installDir;
+  constructor(private readonly getConfig: () => EngineConfig, private readonly script = SCRIPT) {}
+
+  headers(apiUrl: string): Record<string, string> {
+    const child = this.child;
+    if (child) {
+      try {
+        if (managedPort(apiUrl) === child.port) return { Authorization: `Bearer ${child.token}` };
+      } catch { /* 外部引擎不接收托管进程的凭据 */ }
+    }
+    return {};
   }
 
-  private get port(): number {
+  async status(config = this.getConfig(), signal?: AbortSignal): Promise<EngineStatus> {
+    let port = 0;
     try {
-      return parseInt(new URL(this.apiUrl).port) || 9880;
-    } catch {
-      return 9880;
-    }
+      const url = new URL(config.apiUrl);
+      port = Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+      const timeout = AbortSignal.timeout(2000);
+      const response = await fetch(url, {
+        headers: this.headers(config.apiUrl), redirect: 'error',
+        signal: signal ? AbortSignal.any([timeout, signal]) : timeout,
+      });
+      const info = response.ok ? await response.json() : undefined;
+      if (info?.message === 'DSH-GSV-TTS Stream API') return { running: true, port };
+    } catch { /* 未就绪 */ }
+    return { running: false, port, message: '未检测到 GSV 流式引擎' };
   }
 
-  /** 引擎是否响应（以 API 健康检查为准）。 */
-  async status(): Promise<EngineStatus> {
-    const port = this.port;
+  start(config = this.getConfig(), signal = this.lifetime.signal): Promise<EngineActionResult> {
+    if (this.operation) return this.operation.promise;
+    const cancel = new AbortController();
+    const promise = this.startManaged(config, AbortSignal.any([signal, this.lifetime.signal, cancel.signal]))
+      .finally(() => { this.operation = undefined; });
+    this.operation = { promise, cancel };
+    return promise;
+  }
+
+  private async startManaged(config: EngineConfig, signal: AbortSignal): Promise<EngineActionResult> {
+    signal.throwIfAborted();
+    const current = await this.status(config, signal);
+    if (current.running) return { ...current, ok: true, message: '引擎已在运行' };
+    let port: number;
     try {
-      const resp = await fetch(this.apiUrl, { signal: AbortSignal.timeout(5000) });
-      if (resp.ok) return { running: true, port };
-    } catch {
-      // 未运行
+      port = managedPort(config.apiUrl);
+    } catch (error) {
+      return { ...current, ok: false, message: (error as Error).message };
     }
-    return { running: false, port, message: '引擎未响应' };
+    if (this.child && this.child.port !== port) {
+      return { ...current, ok: false, message: '请先停止现有引擎，再切换端口。' };
+    }
+
+    const paths = enginePaths(config.installDir);
+    if (!existsSync(paths.python) || !existsSync(join(paths.source, 'pyproject.toml')) || !existsSync(this.script)) {
+      return { ...current, ok: false, message: '本地引擎尚未安装，请先运行 tts_setup_engine。' };
+    }
+
+    const deadline = AbortSignal.timeout(120000);
+    const waiting = AbortSignal.any([signal, deadline]);
+    let launchError = '';
+    try {
+      waiting.throwIfAborted();
+      if (!this.child) {
+        await verifyModelManifest(paths.models, config.gsvModelManifest ?? '', waiting);
+        mkdirSync(dirname(paths.log), { recursive: true });
+        const fd = openSync(paths.log, 'a');
+        const token = randomUUID();
+        try {
+          const child = spawn(paths.python, ['-I', this.script, '--models_dir', paths.models, '--port', String(port)], {
+            cwd: paths.source,
+            env: { ...process.env, DSH_GSV_ENGINE_TOKEN: token },
+            stdio: ['ignore', fd, fd],
+            windowsHide: true,
+          });
+          this.child = { process: child, port, token };
+          const clearChild = () => { if (this.child?.process === child) this.child = undefined; };
+          child.once('error', error => { launchError = error.message; clearChild(); });
+          child.once('exit', code => { launchError = `退出码 ${code}`; clearChild(); });
+        } finally {
+          closeSync(fd);
+        }
+      }
+      while (this.child) {
+        waiting.throwIfAborted();
+        if ((await this.status(config, waiting)).running) {
+          return { ok: true, running: true, port, message: '引擎已启动' };
+        }
+        await delay(500, undefined, { signal: waiting });
+      }
+    } catch (error) {
+      if (signal.aborted) {
+        await this.terminate();
+        signal.throwIfAborted();
+      }
+      launchError ||= deadline.aborted ? '等待引擎就绪超时' : (error as Error).message;
+      await this.terminate();
+    }
+    return { ok: false, running: false, port, message: `引擎启动失败（${launchError || '进程退出'}），日志：${paths.log}` };
   }
 
-  /** 启动引擎：已运行则直接返回；否则 detached 拉起并等待就绪。 */
-  async start(): Promise<EngineActionResult> {
-    const current = await this.status();
-    if (current.running) return { ok: true, running: true, message: '引擎已在运行' };
-
-    const script = join(this.installDir, 'API', 'dsh_stream_api.py');
-    if (!existsSync(script)) {
-      return { ok: false, running: false, message: `未找到引擎脚本：${script}（请先运行 tts_setup_engine 或检查 installDir）` };
-    }
-    const python = this.detectPython();
-    if (!python) return { ok: false, running: false, message: '未检测到 Python（请安装 Python 3.10+）' };
-
-    const apiDir = join(this.installDir, 'API');
-    const modelsDir = existsSync(join(this.installDir, 'models'))
-      ? join(this.installDir, 'models')
-      : join(this.installDir, 'API', 'models');
-    const port = this.port;
-
-    const logPath = join(tmpdir(), 'dsh-gsv-tts-engine.log');
-    const out = openSync(logPath, 'a');
-    const child = spawn(python.bin, [...python.prefix, script, '-p', String(port), '--models_dir', modelsDir], {
-      cwd: apiDir,
-      detached: true,
-      stdio: ['ignore', out, out],
-    });
-    child.unref();
-    this.child = child;
-    child.on('exit', () => {
-      if (this.child === child) this.child = null;
-    });
-
-    // 等待就绪（模型加载可能较慢）
-    const ready = await this.waitForReady(120000);
-    if (ready) return { ok: true, running: true, message: '引擎已启动' };
-    return {
-      ok: false,
-      running: false,
-      message: `引擎正在启动（模型加载需要时间），日志：${logPath}。稍后刷新状态确认。`,
-    };
+  private async terminate(): Promise<void> {
+    const child = this.child?.process;
+    if (!child) return;
+    const exit = once(child, 'close', { signal: AbortSignal.timeout(5000) });
+    child.kill();
+    await exit.catch(() => {});
   }
 
-  /** 停止引擎：终止由本管理器拉起的进程；外部托管进程不受影响。 */
   async stop(): Promise<EngineActionResult> {
-    if (this.child) {
-      const child = this.child;
-      this.child = null;
-      try {
-        child.kill();
-      } catch {
-        // 忽略
-      }
-    }
-    await new Promise((r) => setTimeout(r, 800));
+    const operation = this.operation;
+    operation?.cancel.abort();
+    await operation?.promise.catch(() => {});
+    await this.terminate();
     const current = await this.status();
     return {
+      ...current,
       ok: !current.running,
-      running: current.running,
-      message: current.running ? '引擎仍在运行（可能由外部进程托管，未能停止）' : '引擎已停止',
+      message: current.running ? '引擎仍在运行，请检查是否由外部托管。' : '引擎已停止',
     };
   }
 
-  private detectPython(): PythonCmd | null {
-    const candidates: Array<[string, string[]]> = [
-      ['python', []],
-      ['python3', []],
-      ['py', ['-3']],
-    ];
-    for (const [bin, prefix] of candidates) {
-      try {
-        execFileSync(bin, [...prefix, '--version'], { encoding: 'utf-8', timeout: 10000, stdio: 'pipe' });
-        return { bin, prefix };
-      } catch {
-        continue;
-      }
-    }
-    return null;
-  }
-
-  private async waitForReady(timeoutMs: number): Promise<boolean> {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      try {
-        const resp = await fetch(this.apiUrl, { signal: AbortSignal.timeout(5000) });
-        if (resp.ok) return true;
-      } catch {
-        // 未就绪
-      }
-      await new Promise((r) => setTimeout(r, 500));
-    }
-    return false;
+  async dispose(): Promise<void> {
+    this.lifetime.abort();
+    await this.operation?.promise.catch(() => {});
+    await this.terminate();
   }
 }

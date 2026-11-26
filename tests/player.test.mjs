@@ -2,6 +2,7 @@
 // 以假 Audio/document 环境加载真实 bundle，驱动 exports.player 单例。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 
 class FakeAudio {
   static instances = [];
@@ -36,13 +37,13 @@ class FakeAudio {
 
 let player;
 
-async function loadPlayer() {
+async function loadPlayer(preferences = {}, reactHooks = {}) {
   const fs = await import('node:fs');
   const src = fs.readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8');
   const requireStub = (name) => {
     const map = {
       // react.Component/createElement 供 GsvErrorBoundary 类定义在模块加载时使用
-      'react': { Component: class {}, createElement: () => null },
+      'react': { Component: class {}, createElement: () => null, ...reactHooks },
       'react/jsx-runtime': {},
       '@deepseek-ai/dsh-client-ui-primitives': {},
     };
@@ -54,13 +55,118 @@ async function loadPlayer() {
   globalThis.Audio = FakeAudio;
   FakeAudio.instances = [];
   // bundle 顶层直接调用 window.__ModuleLoader__.load(...)
-  new Function('window', 'globalThis', src)(globalThis.window, globalThis);
+  new Function('window', 'globalThis', 'localStorage', src)(globalThis.window, globalThis, {
+    getItem: () => JSON.stringify(preferences), setItem() {},
+  });
   player = exportsObj.player;
   assert.ok(player, 'player 应被导出');
+  return exportsObj;
 }
 
 test('加载 bundle 并导出 player（初始 idle）', async () => {
   await loadPlayer();
+  assert.equal(player.state, 'idle');
+});
+
+test('卸载取消在途请求和播放，并释放 DOM 和订阅，可再次挂载', async t => {
+  class Node extends EventTarget {
+    children = [];
+    dataset = {};
+    style = {};
+    append(...children) { children.filter(child => typeof child !== 'string').forEach(child => this.appendChild(child)); }
+    appendChild(child) { child.parent = this; this.children.push(child); }
+    remove() { this.parent.children = this.parent.children.filter(child => child !== this); }
+    setAttribute() {}
+    closest() { return null; }
+  }
+  const document = new Node();
+  document.createElement = () => new Node();
+  document.querySelector = () => null;
+  document.head = new Node();
+  document.body = new Node();
+  const reactEffects = [];
+  const plugin = await loadPlayer({}, { useEffect: effect => reactEffects.push(effect) });
+  const browser = new EventTarget();
+  Object.assign(globalThis.window, {
+    addEventListener: browser.addEventListener.bind(browser),
+    removeEventListener: browser.removeEventListener.bind(browser),
+    getSelection: () => ({ toString: () => 'selected text', anchorNode: { nodeType: 1, closest: () => null } }),
+  });
+  const originalFetch = globalThis.fetch;
+  globalThis.document = document;
+  const started = Promise.withResolvers();
+  globalThis.fetch = (_url, options) => {
+    started.resolve(options.signal);
+    return new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+  };
+  const effects = [];
+  t.after(() => {
+    effects.splice(0).forEach(dispose => dispose());
+    delete globalThis.document;
+    globalThis.fetch = originalFetch;
+  });
+  let unsubscribe = 0;
+  const scope = {
+    getSnapshot: () => ({ value: { autoPlay: true } }),
+    subscribe: () => () => { unsubscribe++; },
+  };
+  const slots = new Map();
+  const ctx = {
+    locale: { bind: () => key => key, register() {} },
+    configForms: { get: () => scope },
+    effect: fn => { const dispose = fn(); if (dispose) effects.push(dispose); },
+    slots: {
+      inject: (_name, register) => register(),
+      register: (def, component) => { slots.set(def.name, component); return () => slots.delete(def.name); },
+    },
+  };
+  plugin.apply(ctx);
+  assert.equal(document.head.children.length, 2);
+  assert.equal(document.body.children.length, 1);
+  document.dispatchEvent(new Event('mouseup'));
+  await delay(10);
+  assert.equal(document.body.children.length, 2);
+  slots.get('conversation.input.overlay')({ sessionId: 'test', scope });
+  const disposeObserver = reactEffects.pop()();
+  const signal = await started.promise;
+  player.play('preview', [{ url: 'playing.wav' }]);
+  const audio = FakeAudio.instances[0];
+  assert.equal(audio.paused, false);
+  effects.pop()();
+  disposeObserver();
+  assert.equal(unsubscribe, 1);
+  assert.equal(signal.aborted, true);
+  assert.equal(audio.paused, true);
+  assert.equal(audio.src, '');
+  assert.equal(player.state, 'idle');
+  assert.equal(player.listeners.size, 0);
+  assert.equal(document.head.children.length, 0);
+  assert.equal(document.body.children.length, 0);
+  document.dispatchEvent(new Event('mouseup'));
+  await delay(10);
+  assert.equal(document.body.children.length, 0);
+  plugin.apply(ctx);
+  assert.equal(document.head.children.length, 2);
+  assert.equal(document.body.children.length, 1);
+});
+
+test('各分段继承浏览器保存的倍速和音量', async () => {
+  await loadPlayer({ speed: 1.5, volume: 0.35, follow: true });
+  player.play('rate', [{ url: 'one' }, { url: 'two' }]);
+  assert.equal(FakeAudio.instances[0].playbackRate, 1.5);
+  assert.equal(FakeAudio.instances[0].volume, .35);
+  FakeAudio.instances[0].emit('ended');
+  assert.equal(FakeAudio.instances[1].playbackRate, 1.5);
+  assert.equal(FakeAudio.instances[1].volume, .35);
+});
+
+test('分段已播完但服务端稍后发完毕信号时，播放器退出等待', async () => {
+  await loadPlayer();
+  player.play('live', [{ url: 'first', duration: 2 }]);
+  player.beginStream('live');
+  FakeAudio.instances[0].emit('ended');
+  assert.equal(player.state, 'loading');
+  player.endStream('live');
   assert.equal(player.state, 'idle');
 });
 

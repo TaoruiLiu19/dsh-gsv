@@ -36,7 +36,9 @@
   },
   "files": [
     "lib",
-    "scripts",
+    "scripts/dsh_stream_api.py",
+    "scripts/gsv-constraints.txt",
+    "scripts/gsv-requirements.txt",
     "cordis.patch.yml",
     "docs/voices",
     "docs/voices.json",
@@ -63,16 +65,17 @@
     }
   },
   "scripts": {
-    "build": "tsc",
-    "prepare": "tsc",
+    "build": "node scripts/build.mjs",
+    "prepare": "node scripts/build.mjs",
     "test": "node --test \"tests/*.test.mjs\"",
     "verify": "node scripts/verify-manifest.mjs",
     "prepublishOnly": "npm run verify",
-    "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\""
+    "clean": "node scripts/build.mjs clean",
+    "test:release": "node scripts/test-release.mjs"
   },
   "engines": {
     "node": "^22.19.0 || >=24.0.0",
-    "dsh": "^0.2.1-rc.2"
+    "dsh": ">=0.2.2-rc.1 <0.3.0-0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-tools": "^0.2.1-rc.2"

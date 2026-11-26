@@ -3,55 +3,26 @@
 修复 personal_api.py /tts/stream 的假流式问题：
 - 原实现用 list(tts.infer_stream(...)) 一次性消费完再逐块发——首包延迟≈总耗时
 - 本端点用 infer_stream_async 逐块 yield，首块到达即推送
-
-路径处理（可移植，无机器硬编码）：
-- 仓库根目录（本脚本位于 <repo>/API/ 下）优先，取仓库源码 gsv_tts
-- 自动探测 --target 安装的 site-packages（同级或仓库内）并追加
-- 系统 site-packages 保持在默认优先级（在 --target 之前），避免依赖版本冲突
-- dsh_start_wrapper.py（setup.ts 生成）也会注入路径，二者互不干扰
-
 v2.1 变更：
 - lifespan 替代已废弃的 @app.on_event("startup")
-- 增加 CORS 头（便于浏览器跨源播放/调试）
 - prompt_text 为空时尝试 ASR 自动转写（能力探测，不可用时返回明确错误）
 - done 事件 total_duration 按逐块采样数累加（真实秒数；注意 clip.audio_len_s 是跨块累计值，不能直接求和）
 """
 import os
-import sys
 import json
 import base64
 import asyncio
 import logging
 import time
-from contextlib import asynccontextmanager
+import hmac
+from contextlib import aclosing, asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 os.environ['GSV_DISABLE_CUDA_GRAPH'] = '1'
 
-# ─── 路径注入（可移植）───
-# 仓库源码优先（支持 GSV_DISABLE_CUDA_GRAPH 环境变量，PyPI 版不支持）
-repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, repo_root)
-# 自动探测 --target 安装的依赖目录（同级 site-packages 或仓库内 site-packages）
-for candidate in (
-    os.path.join(os.path.dirname(repo_root), 'site-packages'),  # D:\GSV\site-packages 式布局
-    os.path.join(repo_root, 'site-packages'),                    # 仓库内布局
-):
-    if os.path.isdir(candidate) and candidate not in sys.path:
-        sys.path.append(candidate)
-
-try:
-    import transformers.utils.import_utils
-    import transformers.modeling_utils
-    transformers.utils.import_utils.check_torch_load_is_safe = lambda: None
-    transformers.modeling_utils.check_torch_load_is_safe = lambda: None
-except Exception:
-    pass
-
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from gsv_tts import TTS
 
@@ -77,6 +48,7 @@ class StreamRequest(BaseModel):
     stream_chunk: int = 25
     boost_first_chunk: bool = True
     stream_mode: str = "token"
+    return_subtitles: bool = False
 
 
 class WarmupRequest(BaseModel):
@@ -144,13 +116,18 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="DSH-GSV-TTS Stream API", lifespan=lifespan)
 
-# 允许跨源访问（浏览器跨源播放/调试需要）
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+engine_token = os.environ.get("DSH_GSV_ENGINE_TOKEN", "")
+
+
+@app.middleware("http")
+async def authorize(request: Request, call_next):
+    if engine_token and not hmac.compare_digest(
+        request.headers.get("authorization", "").encode(), f"Bearer {engine_token}".encode()
+    ):
+        return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+    if request.headers.get("origin"):
+        return JSONResponse({"detail": "Browser origins are not accepted"}, status_code=403)
+    return await call_next(request)
 
 
 def _transcribe_prompt(tts_obj, audio_path: str) -> Optional[str]:
@@ -245,7 +222,7 @@ async def tts_stream(request: StreamRequest):
                 status_code=400,
                 detail="prompt_text 不能为空，且当前引擎不支持 ASR 自动转写（请在音色预设中填写 promptText）",
             )
-        logger.info(f"ASR 转写结果: {prompt_text}")
+        logger.info("已生成提示音频转写")
 
     async def generate():
         try:
@@ -254,7 +231,7 @@ async def tts_stream(request: StreamRequest):
             chunk_count = 0
             prev_duration = 0.0
             chunk_idx = 0
-            async for clip in tts.infer_stream_async(
+            clips = tts.infer_stream_async(
                 spk_audio_path=request.speaker_audio,
                 prompt_audio_path=request.prompt_audio,
                 prompt_audio_text=prompt_text,
@@ -263,26 +240,33 @@ async def tts_stream(request: StreamRequest):
                 stream_chunk=request.stream_chunk,
                 boost_first_chunk=request.boost_first_chunk,
                 speed=request.speed,
+                return_subtitles=request.return_subtitles,
                 debug=False,
-            ):
-                audio_bytes = clip.audio_data.tobytes()
-                audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
-                sample_rate = int(clip.samplerate)
-                # audio_len_s 是累计值（跨块累加），逐块差值才是本块时长
-                cumulative = float(getattr(clip, "audio_len_s", 0.0) or 0.0)
-                chunk_duration = max(cumulative - prev_duration, 0.0)
-                prev_duration = cumulative
-                total_samples += len(clip.audio_data)
-                chunk_count += 1
+            )
+            async with aclosing(clips):
+                async for clip in clips:
+                    audio_bytes = clip.audio_data.tobytes()
+                    audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+                    sample_rate = int(clip.samplerate)
+                    # audio_len_s 是累计值，逐块差值才是本块时长。
+                    cumulative = float(getattr(clip, "audio_len_s", 0.0) or 0.0)
+                    chunk_duration = max(cumulative - prev_duration, 0.0)
+                    prev_duration = cumulative
+                    total_samples += len(clip.audio_data)
+                    chunk_count += 1
 
-                chunk_data = {
-                    "audio": audio_b64,
-                    "sample_rate": sample_rate,
-                    "duration": round(chunk_duration, 4),
-                    "chunk_idx": chunk_idx,
-                }
-                chunk_idx += 1
-                yield f"event: audio\ndata: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
+                    chunk_data = {
+                        "audio": audio_b64,
+                        "sample_rate": sample_rate,
+                        "duration": round(chunk_duration, 4),
+                        "chunk_idx": chunk_idx,
+                        "subtitles": [
+                            {"text": cue["text"], "start_s": float(cue["start_s"]), "end_s": float(cue["end_s"])}
+                            for cue in clip.subtitles if cue.get("end_s") is not None
+                        ] if request.return_subtitles else [],
+                    }
+                    chunk_idx += 1
+                    yield f"event: audio\ndata: {json.dumps(chunk_data, ensure_ascii=False)}\n\n"
 
             if chunk_count == 0:
                 yield f"event: error\ndata: {json.dumps({'error': '未收到任何音频块'}, ensure_ascii=False)}\n\n"
@@ -311,5 +295,5 @@ if __name__ == "__main__":
     parser.add_argument("--models_dir", type=str, default="models")
     parser.add_argument("-p", "--port", type=int, default=9880)
     args = parser.parse_args()
-    models_dir_global = Path(args.models_dir)
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    models_dir_global = Path(args.models_dir).resolve()
+    uvicorn.run(app, host="127.0.0.1", port=args.port)

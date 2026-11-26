@@ -1,212 +1,203 @@
-import { createReadStream, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
-import type { IncomingMessage, ServerResponse } from 'http';
+import { createReadStream, lstatSync, mkdirSync, mkdtempSync, readdirSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { Readable } from 'node:stream';
 
-/**
- * 合成音频的本地存储与投递。
- *
- * - 正常路径：把 PCM 块拼成合法 WAV 文件（含 RIFF 头）写入系统临时目录，
- *   通过 DSH `webServer` 注册的路由以同源短 URL 返回（模型上下文/会话日志
- *   不再被几十 MB 的 data URL 撑爆）。
- * - 兜底路径：无 webServer 时退回 `data:audio/wav;base64,...`（含合法 WAV 头）。
- */
-
+export const TTS_API_PATH = '/api/dsh-gsv-tts';
 const MAX_FILES = 200;
-const FILE_RE = /^[A-Za-z0-9._-]+\.(wav|mp3|ogg)$/;
+export const MAX_AUDIO_BYTES = 256 * 1024 * 1024;
+const TTL_MS = 24 * 60 * 60 * 1000;
+const FILE_RE = /^[A-Za-z0-9_-]+\.(wav|mp3|ogg)$/;
+const PENDING_RE = /^\.[A-Za-z0-9_-]+\.(wav|mp3|ogg)\.[a-f0-9-]+\.tmp$/;
 
-/** 按扩展名回 MIME（Edge MP3 透传需要 audio/mpeg）。 */
 function mimeFor(name: string): string {
-  return name.toLowerCase().endsWith('.mp3') ? 'audio/mpeg' : 'audio/wav';
+  if (name.endsWith('.mp3')) return 'audio/mpeg';
+  if (name.endsWith('.ogg')) return 'audio/ogg';
+  return 'audio/wav';
+}
+
+interface CachedFile {
+  path: string;
+  size: number;
+  modified: number;
+}
+
+function remove(file: string): void {
+  try { unlinkSync(file); } catch { /* 正在使用的文件稍后再回收 */ }
 }
 
 export interface AudioChunk {
-  /** 该块的 base64 编码音频数据（GSV-TTS-Lite 输出 32-bit float32 波形） */
   base64: string;
-  /** 采样率（Hz） */
   sampleRate: number;
 }
 
 export class AudioStore {
-  private dir: string;
+  readonly directory: string;
+  readonly profileDirectory: string;
 
-  /**
-   * @param originProvider 返回当前 Web 服务同源地址（`http://host:port`）；
-   *   DSH 0.2+ 的 `webServer.getOrigin()` 在监听前会抛错，因此按需读取而不是构造时缓存。
-   *   读不到时退回同源相对路径（浏览器可直接播放）。
-   */
-  constructor(private originProvider?: string | (() => string | undefined)) {
-    this.dir = join(tmpdir(), 'dsh-gsv-tts');
-    mkdirSync(this.dir, { recursive: true });
-    this.purgeAll();
+  constructor(
+    private readonly originProvider?: string | (() => string | undefined),
+    scope = '',
+    tempRoot = tmpdir(),
+  ) {
+    const scopeKey = createHash('sha256').update(scope).digest('hex').slice(0, 24);
+    const cacheRoot = join(resolve(tempRoot), 'dsh-gsv-tts', scopeKey);
+    this.profileDirectory = cacheRoot;
+    mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
+    this.directory = mkdtempSync(join(cacheRoot, `instance-${process.pid}-`));
+    this.pruneExitedInstances(cacheRoot);
   }
 
   private origin(): string | undefined {
-    if (typeof this.originProvider === 'function') {
-      try {
-        return this.originProvider();
-      } catch {
-        return undefined;
-      }
-    }
-    return this.originProvider;
+    if (typeof this.originProvider !== 'function') return this.originProvider;
+    try { return this.originProvider(); } catch { return undefined; }
   }
 
-  get enabled(): boolean {
-    return this.origin() !== undefined;
-  }
-
-  /** 将音频块写成 WAV 文件并返回可播放 URL。 */
   save(name: string, chunks: AudioChunk[]): { url: string; name: string } {
     const sampleRate = chunks[0]?.sampleRate || 32000;
-    const pcm = Buffer.concat(chunks.map((c) => Buffer.from(c.base64, 'base64')));
-    const wav = buildWav(pcm, sampleRate);
-    return this.saveRaw(name, wav);
+    const pcm = Buffer.concat(chunks.map(chunk => Buffer.from(chunk.base64, 'base64')));
+    return this.saveRaw(name, buildWav(pcm, sampleRate));
   }
 
-  /** 将原始音频字节（MP3/WAV 等）落盘并返回可播放 URL（4.0.0 Edge MP3 透传）。 */
-  saveRaw(name: string, data: Buffer): { url: string; name: string } {
-    const file = join(this.dir, name);
-    writeFileSync(file, data);
-    this.enforceCap();
+  temporaryPath(name: string): string {
+    if (!FILE_RE.test(name)) throw new Error('无效的音频文件名');
+    return join(this.directory, `.${name}.${randomUUID()}.tmp`);
+  }
+
+  publish(name: string, pending: string): { url: string; name: string } {
+    if (!FILE_RE.test(name) || resolve(pending, '..') !== this.directory) throw new Error('无效的音频路径');
+    if (lstatSync(pending).size > MAX_AUDIO_BYTES) throw new Error('音频文件超过缓存容量');
+    renameSync(pending, join(this.directory, name));
+    this.prune(name);
     return { url: this.urlFor(name), name };
   }
 
-  /** 诊断用：目录与当前会话文件数（不读文件内容）。 */
-  stats(): { directory: string; fileCount: number } {
-    return { directory: this.dir, fileCount: this.listFiles().length };
-  }
-  get directory(): string {
-    return this.dir;
+  saveRaw(name: string, data: Buffer): { url: string; name: string } {
+    const pending = this.temporaryPath(name);
+    try {
+      writeFileSync(pending, data, { flag: 'wx', mode: 0o600 });
+      return this.publish(name, pending);
+    } finally { remove(pending); }
   }
 
-  /** 已落盘文件的同源 URL（用于流式写入完成后直接投递）。 */
   urlFor(name: string): string {
-    const origin = this.origin();
-    return origin ? `${origin}/dsh-gsv-tts/audio/${name}` : `/dsh-gsv-tts/audio/${name}`;
+    return `${this.origin() ?? ''}${TTS_API_PATH}/audio?file=${encodeURIComponent(name)}`;
   }
 
-  /** 服务 `/dsh-gsv-tts/audio/<file>` 请求。 */
-  async serve(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  has(name: string): boolean {
+    if (!FILE_RE.test(name)) return false;
     try {
-      const pathname = new URL(req.url ?? '/', 'http://x').pathname;
-      const name = decodeURIComponent(pathname.split('/').pop() ?? '');
-      if (!FILE_RE.test(name)) {
-        res.writeHead(404);
-        res.end('not found');
-        return;
-      }
-      const file = join(this.dir, name);
-      if (!existsSync(file)) {
-        res.writeHead(404);
-        res.end('not found');
-        return;
-      }
-      const stat = statSync(file);
-      const size = stat.size;
-      const head: Record<string, string | number> = {
-        'Content-Type': mimeFor(name),
-        'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-cache',
-      };
-      // Range 让 <audio> 能拖到未缓冲区间；不支持时浏览器会退回从头播放。
-      const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers?.range ?? '').trim());
-      if (range !== null && (range[1] !== '' || range[2] !== '')) {
-        let start: number;
-        let end: number;
-        if (range[1] === '') {
-          const suffix = Math.max(1, Number(range[2]) || 1);
-          start = Math.max(0, size - suffix);
-          end = size - 1;
+      const stat = lstatSync(join(this.directory, name));
+      return stat.isFile() && Date.now() - stat.mtimeMs <= TTL_MS;
+    } catch { return false; }
+  }
+
+  stats(): { directory: string; fileCount: number } {
+    this.prune();
+    return { directory: this.directory, fileCount: this.list(this.directory).length };
+  }
+
+  serve(request: Request): Response {
+    const name = new URL(request.url).searchParams.get('file') ?? '';
+    if (!FILE_RE.test(name)) return new Response('not found', { status: 404 });
+    const file = join(this.directory, name);
+    let size: number;
+    try {
+      const stat = lstatSync(file);
+      if (!stat.isFile() || Date.now() - stat.mtimeMs > TTL_MS) return new Response('not found', { status: 404 });
+      size = stat.size;
+    } catch {
+      return new Response('not found', { status: 404 });
+    }
+    const headers = new Headers({
+      'Content-Type': mimeFor(name),
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'private, no-store',
+    });
+    const range = request.headers.get('range');
+    let start = 0;
+    let end = size - 1;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+      if (match && (match[1] || match[2])) {
+        if (match[1]) {
+          start = Number(match[1]);
+          end = match[2] ? Math.min(Number(match[2]), end) : end;
         } else {
-          start = Number(range[1]);
-          end = range[2] === '' ? size - 1 : Math.min(Number(range[2]), size - 1);
+          start = Math.max(0, size - Number(match[2]));
         }
-        if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
-          res.writeHead(416, { ...head, 'Content-Range': `bytes */${size}` });
-          res.end();
-          return;
-        }
-        res.writeHead(206, {
-          ...head,
-          'Content-Range': `bytes ${start}-${end}/${size}`,
-          'Content-Length': end - start + 1,
-        });
-        if (req.method === 'HEAD') {
-          res.end();
-          return;
-        }
-        await new Promise<void>((resolve, reject) => {
-          const stream = createReadStream(file, { start, end });
-          stream.on('error', reject);
-          stream.on('close', resolve);
-          stream.pipe(res);
-        });
-        return;
-      }
-      res.writeHead(200, { ...head, 'Content-Length': size });
-      if (req.method === 'HEAD') {
-        res.end();
-        return;
-      }
-      await new Promise<void>((resolve, reject) => {
-        const stream = createReadStream(file);
-        stream.on('error', reject);
-        stream.on('close', resolve);
-        stream.pipe(res);
-      });
-    } catch {
-      if (!res.headersSent) {
-        res.writeHead(500);
-        res.end('internal error');
       } else {
-        res.destroy();
+        start = size;
       }
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= size) {
+        headers.set('Content-Range', `bytes */${size}`);
+        return new Response(null, { status: 416, headers });
+      }
+      headers.set('Content-Range', `bytes ${start}-${end}/${size}`);
+    }
+    headers.set('Content-Length', String(end - start + 1));
+    const body = request.method === 'HEAD' || size === 0 ? null
+      : Readable.toWeb(createReadStream(file, { start, end, signal: request.signal })) as ReadableStream<Uint8Array>;
+    return new Response(body, { status: range ? 206 : 200, headers });
+  }
+
+  dispose(): void {
+    this.removeInstance(this.directory);
+  }
+
+  private prune(newFile?: string): void {
+    const files = this.list(this.directory).sort((a, b) => b.modified - a.modified);
+    let count = 0;
+    let size = 0;
+    for (const file of files) {
+      if (file.path === join(this.directory, newFile ?? '')) {
+        count++;
+        size += file.size;
+        break;
+      }
+    }
+    for (const file of files) {
+      if (file.path === join(this.directory, newFile ?? '')) continue;
+      if (Date.now() - file.modified > TTL_MS || count >= MAX_FILES || size + file.size > MAX_AUDIO_BYTES) {
+        remove(file.path);
+        continue;
+      }
+      count++;
+      size += file.size;
     }
   }
 
-  /** 启动时清空上次会话残留。 */
-  private purgeAll(): void {
-    for (const file of this.listFiles()) {
-      try {
-        unlinkSync(file);
-      } catch {
-        // 忽略清理失败
-      }
-    }
-  }
-
-  /** 会话内限制文件数量，超出删除最旧的。 */
-  private enforceCap(): void {
-    const files = this.listFiles();
-    if (files.length <= MAX_FILES) return;
-    files.sort((a, b) => statSync(a).mtimeMs - statSync(b).mtimeMs);
-    for (const file of files.slice(0, files.length - MAX_FILES)) {
-      try {
-        unlinkSync(file);
-      } catch {
-        // 忽略清理失败
-      }
-    }
-  }
-
-  private listFiles(): string[] {
-    let entries: string[];
+  private list(dir: string, pending = false): CachedFile[] {
     try {
-      entries = readdirSync(this.dir);
-    } catch {
-      return [];
-    }
-    return entries
-      .filter((name) => FILE_RE.test(name))
-      .map((name) => join(this.dir, name))
-      .filter((file) => {
+      return readdirSync(dir).flatMap(name => {
+        if (!(FILE_RE.test(name) || (pending && PENDING_RE.test(name)))) return [];
+        const path = join(dir, name);
         try {
-          return statSync(file).isFile();
-        } catch {
-          return false;
-        }
+          const stat = lstatSync(path);
+          return stat.isFile() ? [{ path, size: stat.size, modified: stat.mtimeMs }] : [];
+        } catch { return []; }
       });
+    } catch { return []; }
+  }
+
+  private removeInstance(dir: string): void {
+    for (const file of this.list(dir, true)) remove(file.path);
+    try { rmdirSync(dir); } catch { /* 跳过仍在使用的目录 */ }
+  }
+
+  private pruneExitedInstances(root: string): void {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      const match = /^instance-(\d+)-[A-Za-z0-9]+$/.exec(entry.name);
+      if (!match || !entry.isDirectory()) continue;
+      const dir = join(root, entry.name);
+      try {
+        if (Date.now() - lstatSync(dir).mtimeMs < TTL_MS) continue;
+        process.kill(Number(match[1]), 0);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') this.removeInstance(dir);
+      }
+    }
   }
 }
 

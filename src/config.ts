@@ -42,7 +42,7 @@ export function readConfigValue<T>(value: unknown, fallback: T): T {
  * 显式选择（含 deepseek）一律尊重，避免把用户切回别的引擎。
  */
 export function resolveProviderKind(stored: unknown, voices: readonly VoicePreset[]): ProviderKind {
-  if (stored === 'gsv' || stored === 'edge' || stored === 'deepseek') return stored;
+  if (stored === 'gsv' || stored === 'edge' || stored === 'deepseek' || stored === 'custom') return stored;
   return voices.length > 0 ? 'gsv' : 'edge';
 }
 
@@ -67,11 +67,20 @@ export function snapshotConfig(raw: unknown): Config {
   const voices = readConfigValue<VoicePreset[]>(source.voices, []);
   const list = Array.isArray(voices) ? voices : [];
   const timeout = readConfigValue(source.timeout, 30000);
+  const budget = readConfigValue<number | null>(source.deepseekAutoCharsPerDay, null);
+  const provider = resolveProviderKind(readConfigValue<unknown>(source.provider, undefined), list);
+  const storedVoices = readConfigValue<Record<string, unknown>>(source.voiceByProvider, {});
+  const voiceByProvider: Config['voiceByProvider'] = {};
+  for (const id of ['edge', 'deepseek', 'custom', 'gsv'] as const) {
+    if (typeof storedVoices?.[id] === 'string') voiceByProvider[id] = storedVoices[id];
+  }
   return {
     apiUrl: readConfigValue(source.apiUrl, DEFAULT_API_URL),
     voices: list,
-    defaultVoice: readConfigValue(source.defaultVoice, ''),
+    defaultVoice: voiceByProvider[provider] ?? readConfigValue(source.defaultVoice, ''),
+    voiceByProvider,
     autoPlay: readConfigValue(source.autoPlay, false),
+    liveReply: readConfigValue(source.liveReply, false),
     engineMode: resolveEngineMode(source),
     interruptOnNew: readConfigValue(source.interruptOnNew, true),
     // AbortSignal.timeout / 工具 timeoutMs 都要求正数：非法值回退默认，避免旧配置把插件弄挂
@@ -79,9 +88,17 @@ export function snapshotConfig(raw: unknown): Config {
     installDir: readConfigValue(source.installDir, DEFAULT_INSTALL_DIR),
     voiceRegistryUrl: readConfigValue(source.voiceRegistryUrl, DEFAULT_VOICE_REGISTRY_URL),
     schemaVersion: readConfigValue(source.schemaVersion, SCHEMA_VERSION),
-    provider: resolveProviderKind(readConfigValue<unknown>(source.provider, undefined), list),
+    provider,
     deepseekApiKey: String(readConfigValue(source.deepseekApiKey, '') ?? ''),
     deepseekApiKeyEnv: String(readConfigValue(source.deepseekApiKeyEnv, DEFAULT_DEEPSEEK_KEY_REF) ?? ''),
+    customBaseUrl: String(readConfigValue(source.customBaseUrl, '')),
+    customModel: String(readConfigValue(source.customModel, 'kokoro')),
+    customKeyRef: String(readConfigValue(source.customKeyRef, '')),
+    customInstructions: String(readConfigValue(source.customInstructions, '')),
+    customFormat: readConfigValue<string>(source.customFormat, 'pcm') === 'wav' ? 'wav' : 'pcm',
+    gsvSpeed: Math.max(0.5, Math.min(2, Number(readConfigValue(source.gsvSpeed, 1)) || 1)),
+    gsvModelManifest: String(readConfigValue(source.gsvModelManifest, '')),
+    deepseekAutoCharsPerDay: typeof budget === 'number' && Number.isFinite(budget) ? Math.max(0, Math.floor(budget)) : null,
     lexicon: String(readConfigValue(source.lexicon, '') ?? ''),
     quotaDaily: readConfigValue<number | null>(source.quotaDaily, null),
   };

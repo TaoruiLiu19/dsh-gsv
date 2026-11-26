@@ -13,7 +13,10 @@ export interface Config {
   apiUrl: string;
   voices: VoicePreset[];
   defaultVoice: string;
+  voiceByProvider: Partial<Record<ProviderKind, string>>;
   autoPlay: boolean;
+  /** Speak visible, completed sentences from the active attempt before the message commits. */
+  liveReply: boolean;
   /** 引擎启动方式：always=常驻（性能优先），eco=节能（资源优先，与旧版一致） */
   engineMode: 'always' | 'eco';
   /** 新回复到来时是否打断当前朗读（false = 正在朗读时跳过新回复，避免叠音） */
@@ -30,6 +33,14 @@ export interface Config {
   deepseekApiKey: string;
   /** 凭据引用名（默认 DEEPSEEK_API_KEY）：插件据此从 Harness 凭据服务复用已保存的 Key */
   deepseekApiKeyEnv: string;
+  customBaseUrl: string;
+  customModel: string;
+  customKeyRef: string;
+  customInstructions: string;
+  customFormat: 'pcm' | 'wav';
+  gsvSpeed: number;
+  gsvModelManifest: string;
+  deepseekAutoCharsPerDay: number | null;
   /** 发音词典（多行文本：`原词=读法`，`#` 开头为注释），对所有 provider 生效 */
   lexicon: string;
   /** 云端简单模式的每日配额（null = 不限量）；仅引导文案用，服务端硬计数留待 4.x */
@@ -37,7 +48,7 @@ export interface Config {
 }
 
 /** TTS 提供方类型。 */
-export type ProviderKind = 'gsv' | 'edge' | 'deepseek';
+export type ProviderKind = 'gsv' | 'edge' | 'deepseek' | 'custom';
 
 /** 提供方音色信息（edge = 微软官方声音；gsv = 本地预设）。 */
 export interface VoiceInfo {
@@ -64,6 +75,13 @@ export interface ProviderChunk {
   sampleRate?: number;
   /** gsv 流结束时的总时长（秒），随最后一个块携带 */
   totalDuration?: number;
+  cues?: SpeechCue[];
+}
+
+export interface SpeechCue {
+  text: string;
+  start: number;
+  end: number;
 }
 
 /** TTS 提供方统一接口（4.0.0 双 Provider 抽象）。 */
@@ -109,12 +127,15 @@ export interface SynthesizeResult {
   audioUrl: string;
   audioLen: number;
   filename: string;
+  cues?: SpeechCue[];
 }
 
 /** 渐进分段播放中的一段音频。 */
 export interface TTSAudioSegment {
   url: string;
   duration: number;
+  text?: string;
+  cues?: SpeechCue[];
 }
 
 export interface SynthesizeSegmentsResult {

@@ -18,13 +18,35 @@ window.__ModuleLoader__.load({
 
 		// ─── 样式注入 ───
 		const css = "._gsv_action{width:28px;height:28px;color:var(--dsw-alias-label-tertiary);cursor:pointer;background:0 0;border:none;border-radius:28px;justify-content:center;align-items:center;padding:6px;display:inline-flex;font-size:14px}._gsv_action:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-secondary)}._gsv_action:disabled{cursor:default;opacity:.4}._gsv_failure{color:var(--dsw-alias-label-tertiary);font-size:12px;margin-left:6px}._gsv_action_active{color:var(--dsw-alias-brand,#6e56cf)!important;background:var(--dsw-alias-interactive-bg-hover)}._gsv_paused{opacity:.7}._gsv_controls{display:inline-flex;align-items:center;gap:2px}._gsv_progress{font-size:11px;color:var(--dsw-alias-label-tertiary);margin-left:4px;font-variant-numeric:tabular-nums;white-space:nowrap}._gsv_turn_active{outline:1px solid var(--dsw-alias-brand,#6e56cf);outline-offset:2px;border-radius:8px;animation:_gsv_pulse 2s ease-in-out infinite}@keyframes _gsv_pulse{0%,100%{outline-color:var(--dsw-alias-brand,#6e56cf)}50%{outline-color:transparent}}";
-		const tagId = "dsh-gsv-tts/read-button.css";
-		if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
-			const tag = document.createElement("style");
-			tag.dataset.plugin = "dsh-gsv-tts";
-			tag.dataset.pluginCss = tagId;
-			tag.textContent = css;
-			document.head.appendChild(tag);
+		let actionStyle = null;
+		let lifecycle;
+		function installActionStyles() {
+			actionStyle = document.createElement("style");
+			actionStyle.dataset.plugin = "dsh-gsv-tts";
+			actionStyle.dataset.pluginCss = "dsh-gsv-tts/read-button.css";
+			actionStyle.textContent = css + "::highlight(dsh-gsv-sentence){background-color:var(--dsw-alias-interactive-bg-hover,#eae6ff);color:inherit}";
+			document.head.appendChild(actionStyle);
+		}
+
+		function onDeactivate(cleanup, signal = lifecycle?.signal) {
+			let active = true;
+			const dispose = () => {
+				if (!active) return;
+				active = false;
+				signal?.removeEventListener("abort", dispose);
+				cleanup();
+			};
+			if (signal?.aborted) dispose();
+			else signal?.addEventListener("abort", dispose, { once: true });
+			return dispose;
+		}
+
+		async function pluginFetch(url, options = {}, lifetime = lifecycle?.signal) {
+			const signal = lifetime && options.signal ? AbortSignal.any([lifetime, options.signal]) : lifetime || options.signal;
+			signal?.throwIfAborted();
+			const response = await fetch(url, signal ? { ...options, signal } : options);
+			signal?.throwIfAborted();
+			return response;
 		}
 
 		// ─── 文案 ───
@@ -37,6 +59,11 @@ const DEEPSEEK_VOICE_OPTIONS = [
 
 // 提供方目录兜底（服务端 /provider/catalog 可用时以其为准）：Tab、能力、默认音色都从这里来
 const DEFAULT_PROVIDER_CATALOG = [
+	{
+		id: "custom", label: "自定义 TTS", i18nKey: "mode.custom", badge: "cloud", defaultVoice: "af_sarah",
+		description: "OpenAI-compatible /audio/speech",
+		capabilities: { needsEngine: false, needsKey: false, network: true, voiceSource: "builtin", streaming: true }
+	},
 	{
 		id: "edge",
 		label: "快速体验（Edge）",
@@ -53,7 +80,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 		description: "DeepSeek 官方 TTS，复用 Harness 凭据，按字符计费",
 		badge: "official",
 		defaultVoice: "stella",
-		capabilities: { needsEngine: false, needsKey: true, network: true, voiceSource: "builtin", cloning: false, customVoices: false, billed: true, streaming: false, formats: ["wav"] }
+		capabilities: { needsEngine: false, needsKey: true, network: true, voiceSource: "builtin", cloning: false, customVoices: false, billed: true, streaming: true, formats: ["wav"] }
 	},
 	{
 		id: "gsv",
@@ -66,6 +93,13 @@ const DEFAULT_PROVIDER_CATALOG = [
 	}
 ];
 		const zh = {
+			"mode.custom": "自定义 TTS",
+			"field.liveReply": "生成时逐句朗读可见正文",
+			"field.usage": "查看朗读用量和性能",
+			"field.modelIntegrity": "校验模型 SHA-256",
+			"field.modelManifest": "模型版本和 SHA-256 清单路径",
+			"field.synthesisSpeed": "GSV 合成语速",
+			"field.deepseekBudget": "DeepSeek 每日自动朗读计费字符上限（空白不限，0 禁止）",
 			"read": "朗读结果",
 			"reading": "朗读中…",
 			"pause": "暂停",
@@ -169,6 +203,13 @@ const DEFAULT_PROVIDER_CATALOG = [
 			"helpTitle": "帮助"
 		};
 		const en = {
+			"mode.custom": "Custom TTS",
+			"field.liveReply": "Read visible sentences while the reply streams",
+			"field.usage": "Speech usage and performance",
+			"field.modelIntegrity": "Verify model SHA-256",
+			"field.modelManifest": "Model version and SHA-256 manifest path",
+			"field.synthesisSpeed": "GSV synthesis speed",
+			"field.deepseekBudget": "Daily billable DeepSeek auto-read characters (blank: unlimited, 0: disabled)",
 			"read": "Read result",
 			"reading": "Reading…",
 			"pause": "Pause",
@@ -276,6 +317,32 @@ const DEFAULT_PROVIDER_CATALOG = [
 		// 任意时刻最多一个朗读队列在播；start 新队列即打断旧队列（barge-in）。
 		// 暂停/继续作用于整个队列：记录当前段 + 段内时间，恢复后从原处续播。
 		let activeSpeak = null; // 进行中的流式朗读请求（AbortController）
+		const playbackPrefs = { speed: 1, volume: 1, follow: false };
+		try {
+			const stored = JSON.parse(localStorage.getItem("dsh-gsv-tts:player") || "{}");
+			if ([0.75, 1, 1.25, 1.5, 1.75, 2].includes(stored.speed)) playbackPrefs.speed = stored.speed;
+			if (Number.isFinite(stored.volume) && stored.volume >= 0 && stored.volume <= 1) playbackPrefs.volume = stored.volume;
+			playbackPrefs.follow = stored.follow === true;
+		} catch { /* 浏览器禁止或尚无本地存储 */ }
+		const acceptSpeech = () => playbackPrefs.follow ? "application/x-ndjson" : "audio/wav, application/x-ndjson;q=0.9";
+		function applyPlaybackPrefs(audio) {
+			if (!audio) return;
+			audio.playbackRate = playbackPrefs.speed;
+			audio.volume = playbackPrefs.volume;
+			audio.preservesPitch = true;
+		}
+		function updatePlaybackPref(field, value) {
+			playbackPrefs[field] = value;
+			applyPlaybackPrefs(player.audio);
+			try { localStorage.setItem("dsh-gsv-tts:player", JSON.stringify(playbackPrefs)); } catch {}
+		}
+		let firstAudioProbe = null;
+		let lastCaptions = [];
+		function microphoneActive() {
+			return typeof document !== "undefined" && Boolean(document.querySelector(
+				'[data-voice-activity="requesting"], [data-voice-activity="recording"], [data-voice-activity="transcribing"]'
+			));
+		}
 		const player = {
 			state: "idle", // idle | loading | playing | paused
 			key: null,     // 当前队列标识：`${sessionId}:${messageId}` 或 `autoplay:${seq}`
@@ -286,6 +353,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 			audio: null,
 			error: null,
 			streamingKey: null, // 流式朗读中：队列暂时播空时保持 loading，等下一段到达
+			waitingForSegment: false,
 			listeners: new Set(),
 			_tick: 0,
 			subscribe(fn) {
@@ -311,6 +379,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 			},
 			stop() {
 					player.streamingKey = null;
+					player.waitingForSegment = false;
 					player._stopAudio();
 					player.state = "idle";
 					player.key = null;
@@ -362,7 +431,10 @@ const DEFAULT_PROVIDER_CATALOG = [
 					player.enqueue(key, list);
 				},
 				endStream(key) {
-					if (player.streamingKey === key) player.streamingKey = null;
+					if (player.streamingKey === key) {
+						player.streamingKey = null;
+						if (player.waitingForSegment) player._finish();
+					}
 				},
 				_start(key, segments, opts) {
 					const list = segments || [];
@@ -384,6 +456,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				_finish() {
 					// 流式朗读还没收到 done：保持 loading，等下一段 push 到达后续播
 					if (player.streamingKey && player.streamingKey === player.key) {
+						player.waitingForSegment = true;
 						player.state = "loading";
 						player._emit();
 						return;
@@ -394,26 +467,38 @@ const DEFAULT_PROVIDER_CATALOG = [
 						const next = player.backlog.shift();
 						player._start(next.key, next.segments, next.opts);
 					} else {
+						lastCaptions = player.queue.filter(segment => segment.text && segment.duration);
 						player.stop();
 					}
 				},
 			_playIndex(i) {
+				if (lifecycle?.signal.aborted || microphoneActive()) { player.stop(); return; }
 					const seg = player.queue[i];
 					if (!seg) {
 						player._finish();
 						return;
 					}
 				player.index = i;
+				player.waitingForSegment = false;
 				const audio = new Audio(seg.url);
 				player.audio = audio;
+				applyPlaybackPrefs(audio);
 				player.state = "playing";
 				player._emit();
+				audio.addEventListener("playing", () => {
+					const probe = firstAudioProbe;
+					if (player.audio !== audio || !probe || probe.key !== player.key) return;
+					firstAudioProbe = null;
+					pluginFetch("api/dsh-gsv-tts/metrics", { method: "POST", headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ provider: probe.provider, firstAudioMs: performance.now() - probe.startedAt }) }).catch(() => {});
+				});
 				audio.addEventListener("ended", () => {
 					if (player.audio !== audio) return;
 					player._playIndex(i + 1);
 				});
 				audio.addEventListener("error", () => {
 					if (player.audio !== audio) return;
+					player.stop();
 					player.error = "audio-error";
 					player._emit();
 				});
@@ -482,19 +567,30 @@ const DEFAULT_PROVIDER_CATALOG = [
 		};
 
 		// 自动播放解锁：首次用户手势时触碰一次 AudioContext，规避浏览器自动播放策略
-		if (typeof document !== "undefined" && typeof window !== "undefined") {
+		function installAudioUnlock() {
+			let context, timer;
+			const removeListeners = () => {
+				document.removeEventListener("pointerdown", unlock);
+				document.removeEventListener("keydown", unlock);
+			};
+			const release = () => {
+				clearTimeout(timer);
+				if (context) { void context.close().catch(() => {}); context = null; }
+			};
 			const unlock = () => {
+				removeListeners();
 				try {
 					const AC = window.AudioContext || window.webkitAudioContext;
 					if (AC) {
-						const ac = new AC();
-						ac.resume();
-						setTimeout(() => { try { ac.close(); } catch { /* 忽略 */ } }, 50);
+						context = new AC();
+						void context.resume().catch(() => {});
+						timer = setTimeout(release, 50);
 					}
-				} catch { /* 忽略 */ }
+				} catch { /* AudioContext unavailable */ }
 			};
-			document.addEventListener("pointerdown", unlock, { once: true });
-			document.addEventListener("keydown", unlock, { once: true });
+			document.addEventListener("pointerdown", unlock);
+			document.addEventListener("keydown", unlock);
+			return () => { removeListeners(); release(); };
 		}
 
 		function formatTime(sec) {
@@ -519,25 +615,32 @@ const DEFAULT_PROVIDER_CATALOG = [
 				try { msg = JSON.parse(text); } catch { return; }
 				if (msg.type === "segment" && msg.url) {
 					count += 1;
-					onSegment({ url: msg.url, duration: msg.duration || 0 }, count === 1);
+					onSegment({ url: msg.url, duration: msg.duration || 0, text: msg.text, cues: msg.cues }, count === 1);
 				} else if (msg.type === "error") {
 					error = msg.message || "stream error";
 				}
 			};
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				buffer += decoder.decode(value, { stream: true });
-				const lines = buffer.split("\n");
-				buffer = lines.pop();
-				for (const line of lines) handle(line);
+			try {
+				while (true) {
+					const { done, value } = await reader.read();
+					if (done) break;
+					buffer += decoder.decode(value, { stream: true });
+					const lines = buffer.split("\n");
+					buffer = lines.pop();
+					for (const line of lines) handle(line);
+				}
+				handle(buffer + decoder.decode());
+				return { count, error };
+			} finally {
+				await reader.cancel().catch(() => {});
+				reader.releaseLock();
 			}
-			if (buffer) handle(buffer);
-			return { count, error };
 		}
 
 		// 用户主动停止：先中断流式/整段请求，再清空播放队列。
 		function stopPlayback() {
+			firstAudioProbe = null;
+			lastCaptions = [];
 			if (activeSpeak) {
 				activeSpeak.abort();
 				activeSpeak = null;
@@ -546,6 +649,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				fullAbort.abort();
 				fullAbort = null;
 			}
+			fullBusy = false;
 			if (gsvPanel) gsvPanel.style.display = "none";
 			player.stop();
 		}
@@ -553,17 +657,20 @@ const DEFAULT_PROVIDER_CATALOG = [
 		// ─── 整段播放 / 下载面板 ───
 		// 默认朗读仍是流式（首音快）；只有点「整段」或「下载」才生成完整文件。
 		let gsvPanel = null;
+		let panelStyle = null;
+		let unsubscribePanel = null;
 		let fullCtx = null;
 		let fullAbort = null;
 		let fullUrl = null;
 		let fullBusy = false;
 
 		function ensurePanelStyles() {
-			if (typeof document === "undefined" || document.querySelector("style[data-gsv-panel]")) return;
+			if (typeof document === "undefined" || panelStyle) return;
 			const style = document.createElement("style");
 			style.dataset.gsvPanel = "1";
 			style.textContent = "._gsv_panel{position:fixed;right:20px;bottom:20px;z-index:2147483000;width:320px;padding:10px 12px 12px;border-radius:12px;background:var(--dsw-alias-bg-elevated,#1f1f23);color:var(--dsw-alias-label-primary,#eee);border:1px solid var(--dsw-alias-border-secondary,rgba(255,255,255,.16));box-shadow:0 10px 30px rgba(0,0,0,.45);display:none;font-size:12px;font-family:inherit;text-align:left}._gsv_panel_row{display:flex;align-items:center;gap:2px}._gsv_panel_row button{background:0 0;border:none;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:5px 7px;border-radius:6px}._gsv_panel_row button:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.12))}._gsv_panel_row button:disabled{opacity:.5;cursor:default}._gsv_panel_time{margin-left:auto;font-variant-numeric:tabular-nums;opacity:.8;white-space:nowrap;padding:0 4px}._gsv_panel_dl{color:inherit;text-decoration:none;padding:5px 7px;border-radius:6px;white-space:nowrap;cursor:pointer;opacity:.45}._gsv_panel_dl:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.12))}._gsv_panel_dl[href]{opacity:1}._gsv_range{width:100%;margin:10px 0 0;accent-color:var(--dsw-alias-brand,#6e56cf);cursor:pointer}._gsv_range:disabled{opacity:.4;cursor:default}._gsv_menu{position:fixed;z-index:2147483001;display:none;min-width:160px;padding:4px;border-radius:10px;background:var(--dsw-alias-bg-elevated,#1f1f23);border:1px solid var(--dsw-alias-border-secondary,rgba(255,255,255,.16));box-shadow:0 8px 24px rgba(0,0,0,.4)}._gsv_menu button{display:block;width:100%;text-align:left;background:0 0;border:none;color:var(--dsw-alias-label-primary,#eee);font-size:12px;padding:7px 9px;border-radius:7px;cursor:pointer}._gsv_menu button:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.12))}";
 			document.head.appendChild(style);
+			panelStyle = style;
 		}
 
 		function ensurePanel() {
@@ -597,17 +704,52 @@ const DEFAULT_PROVIDER_CATALOG = [
 			dl.setAttribute("download", "speech.wav");
 			dl.addEventListener("click", async (e) => {
 				e.preventDefault();
+				const context = fullCtx;
 				if (!fullUrl) await loadFull(false);
-				if (!fullUrl) return;
+				if (!fullUrl || fullCtx !== context) return;
 				const a = document.createElement("a");
 				a.href = fullUrl;
-				a.download = String(fullUrl).split("/").pop() || "speech.wav";
+				a.download = downloadName(fullUrl);
 				document.body.appendChild(a);
 				a.click();
 				a.remove();
 			});
 			const close = mk("✕", "关闭", () => stopPlayback());
 			row.append(toggle, stop, full, time, dl, close);
+			const controls = document.createElement("div");
+			controls.className = "_gsv_panel_row _gsv_secondary";
+			const previous = mk("上一句", "播放上一句", () => jumpSentence(-1));
+			const next = mk("下一句", "播放下一句", () => jumpSentence(1));
+			const speed = document.createElement("select");
+			speed.setAttribute("aria-label", "播放倍速");
+			for (const rate of [0.75, 1, 1.25, 1.5, 1.75, 2]) {
+				const option = document.createElement("option");
+				option.value = String(rate);
+				option.textContent = rate + "×";
+				speed.appendChild(option);
+			}
+			speed.value = String(playbackPrefs.speed);
+			speed.addEventListener("change", () => updatePlaybackPref("speed", Number(speed.value)));
+			const volume = document.createElement("input");
+			volume.type = "range";
+			volume.min = "0"; volume.max = "1"; volume.step = "0.05";
+			volume.value = String(playbackPrefs.volume);
+			volume.setAttribute("aria-label", "音量");
+			volume.style.width = "68px";
+			volume.addEventListener("input", () => updatePlaybackPref("volume", Number(volume.value)));
+			const follow = document.createElement("label");
+			const checkbox = document.createElement("input");
+			checkbox.type = "checkbox";
+			checkbox.checked = playbackPrefs.follow;
+			checkbox.addEventListener("change", () => updatePlaybackPref("follow", checkbox.checked));
+			follow.append(checkbox, "逐句跟读");
+			follow.title = "下一次朗读使用逐句播放和文字对齐";
+			const subtitles = mk("SRT", "下载当前朗读字幕", downloadSubtitles);
+			controls.append(previous, next, speed, volume, follow, subtitles);
+			controls.style.flexWrap = "wrap";
+			const caption = document.createElement("div");
+			caption.className = "_gsv_caption";
+			caption.style.marginTop = "6px";
 			const range = document.createElement("input");
 			range.type = "range";
 			range.className = "_gsv_range";
@@ -623,46 +765,131 @@ const DEFAULT_PROVIDER_CATALOG = [
 				try { a.currentTime = v; } catch { /* 忽略 */ }
 				time.textContent = formatTime(v) + " / " + formatTime(a.duration);
 			});
-			el.append(row, range);
+			el.append(row, range, controls, caption);
 			document.body.appendChild(el);
 			gsvPanel = el;
-			player.subscribe(updatePanel);
+			unsubscribePanel = player.subscribe(updatePanel);
 			updatePanel();
 			return el;
 		}
 
 		function updatePanel() {
 			if (!gsvPanel) return;
-			const active = player.state !== "idle";
+			const active = player.state !== "idle" || lastCaptions.length > 0 || Boolean(player.error);
 			gsvPanel.style.display = active ? "block" : "none";
-			if (!active) return;
+			if (!active) { globalThis.CSS?.highlights?.delete("dsh-gsv-sentence"); return; }
 			const a = player.audio;
 			const dur = a && isFinite(a.duration) && a.duration > 0 ? a.duration : 0;
 			const cur = a ? (a.currentTime || 0) : 0;
-			const range = gsvPanel.querySelector("input[type=range]");
+			const range = gsvPanel.querySelector("._gsv_range");
 			const time = gsvPanel.querySelector("._gsv_panel_time");
 			const toggle = gsvPanel.querySelector("button");
 			const full = gsvPanel.querySelectorAll("button")[2];
 			const dl = gsvPanel.querySelector("a");
+			const [previous, next, subtitles] = gsvPanel.querySelectorAll("._gsv_secondary button");
+			previous.disabled = player.index <= 0 || !player.queue[player.index]?.text;
+			next.disabled = player.index >= player.queue.length - 1 || !player.queue[player.index]?.text;
+			subtitles.disabled = !lastCaptions.length && !player.queue.some(segment => segment.text && segment.duration);
+			const caption = gsvPanel.querySelector("._gsv_caption");
+			renderCaption(caption, player.queue[player.index], cur);
+			if (player.error && player.state === "idle") {
+				caption.hidden = false;
+				caption.textContent = player.error === "audio-error" ? "音频播放失败" : player.error;
+			}
 			range.max = String(dur || 0);
 			range.disabled = !(dur > 0);
 			if (document.activeElement !== range) range.value = String(Math.min(cur, dur || cur));
 			time.textContent = formatTime(cur) + " / " + (dur > 0 ? formatTime(dur) : "--:--");
 			toggle.textContent = player.state === "paused" ? "▶" : "⏸";
 			if (full) {
-				full.disabled = fullBusy;
+				full.disabled = fullBusy || !fullCtx;
 				full.textContent = fullBusy ? "生成中…" : "整段";
 			}
 			if (fullUrl) {
 				dl.href = fullUrl;
-				dl.setAttribute("download", String(fullUrl).split("/").pop() || "speech.wav");
+				dl.setAttribute("download", downloadName(fullUrl));
 			} else {
 				dl.removeAttribute("href");
 			}
 		}
 
+		function jumpSentence(direction) {
+			const index = player.index + direction;
+			if (index < 0 || index >= player.queue.length || !player.queue[index]?.text) return;
+			player._stopAudio();
+			player._playIndex(index);
+		}
+
+		function renderCaption(element, segment, time) {
+			const text = segment?.text || "";
+			const cue = segment?.cues?.find(item => time >= item.start && time < item.end);
+			let boundary = -1;
+			let from = 0;
+			if (cue) for (const item of segment.cues) {
+				const match = text.indexOf(item.text, from);
+				if (item === cue) { boundary = match; break; }
+				if (match >= 0) from = match + item.text.length;
+			}
+			const key = text + "\n" + (cue?.start ?? "");
+			if (element.dataset.cue === key) return;
+			element.dataset.cue = key;
+			element.hidden = !text;
+			element.textContent = text;
+			if (boundary >= 0) {
+				const mark = document.createElement("mark");
+				mark.textContent = cue.text;
+				element.replaceChildren(text.slice(0, boundary), mark, text.slice(boundary + cue.text.length));
+			}
+			const highlights = globalThis.CSS?.highlights;
+			highlights?.delete("dsh-gsv-sentence");
+			const turn = text && document.querySelector("._gsv_turn_active");
+			if (!turn || !highlights || typeof Highlight === "undefined") return;
+			const walker = document.createTreeWalker(turn, NodeFilter.SHOW_TEXT);
+			while (walker.nextNode()) {
+				const node = walker.currentNode;
+				const start = node.textContent.indexOf(text);
+				if (start < 0) continue;
+				const range = document.createRange();
+				range.setStart(node, start);
+				range.setEnd(node, start + text.length);
+				highlights.set("dsh-gsv-sentence", new Highlight(range));
+				break;
+			}
+		}
+
+		function downloadSubtitles() {
+			const stamp = seconds => new Date(Math.max(0, Math.round(seconds * 1000))).toISOString().slice(11, 23).replace(".", ",");
+			let offset = 0;
+			const entries = [];
+			for (const segment of player.queue.length ? player.queue : lastCaptions) {
+				if (segment.text && segment.duration > 0) {
+					entries.push((entries.length + 1) + "\n" + stamp(offset) + " --> " + stamp(offset + segment.duration) + "\n" + segment.text);
+				}
+				offset += segment.duration || 0;
+			}
+			if (!entries.length) return;
+			const url = URL.createObjectURL(new Blob([entries.join("\n\n"), "\n"], { type: "application/x-subrip;charset=utf-8" }));
+			const link = document.createElement("a");
+			link.href = url;
+			link.download = "speech.srt";
+			link.click();
+			let timer;
+			const dispose = onDeactivate(() => {
+				clearTimeout(timer);
+				URL.revokeObjectURL(url);
+			});
+			if (!lifecycle?.signal.aborted) timer = setTimeout(dispose, 1000);
+		}
+
+		function downloadName(url) {
+			return new URL(url, document.baseURI).searchParams.get("file") || "speech.wav";
+		}
+
 		function showPanel(ctx) {
-			fullCtx = ctx;
+			fullAbort?.abort();
+			fullAbort = null;
+			lastCaptions = [];
+			fullCtx = ctx ? { ...ctx, followText: playbackPrefs.follow } : null;
 			fullUrl = null;
 			fullBusy = false;
 			ensurePanel();
@@ -672,7 +899,11 @@ const DEFAULT_PROVIDER_CATALOG = [
 
 		async function loadFull(play) {
 			if (!fullCtx || fullBusy) return;
-			if (fullAbort) fullAbort.abort();
+			if (fullUrl && play) {
+				player.play("full:" + Date.now(), [{ url: fullUrl, duration: 0 }]);
+				return;
+			}
+			const context = fullCtx;
 			if (activeSpeak) {
 				activeSpeak.abort();
 				activeSpeak = null;
@@ -683,13 +914,14 @@ const DEFAULT_PROVIDER_CATALOG = [
 			fullBusy = true;
 			updatePanel();
 			try {
-				const resp = await fetch("/dsh-gsv-tts/speak/full", {
+				const resp = await pluginFetch("api/dsh-gsv-tts/speak/full", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify(fullCtx),
+					body: JSON.stringify(context),
 					signal: ac.signal
 				});
 				const data = await resp.json().catch(() => ({}));
+				if (ac.signal.aborted || fullCtx !== context) return;
 				if (!resp.ok || !data.audioUrl) throw new Error(data.message || ("HTTP " + resp.status));
 				fullUrl = data.audioUrl;
 				if (play) {
@@ -700,37 +932,50 @@ const DEFAULT_PROVIDER_CATALOG = [
 					try { console.warn("[dsh-gsv-tts] 整段生成失败:", e); } catch { /* 忽略 */ }
 				}
 			} finally {
-				if (fullAbort === ac) fullAbort = null;
-				fullBusy = false;
-				updatePanel();
+				if (fullAbort === ac) {
+					fullAbort = null;
+					fullBusy = false;
+					updatePanel();
+				}
 			}
 		}
 
 		// 消费 /speak 的三种响应：NDJSON 分段、流式 WAV、旧 JSON 分段
-		async function playSpeakResponse(resp, key) {
+		async function playSpeakResponse(resp, key, signal, onStart, startedAt = performance.now()) {
+			signal?.throwIfAborted();
+			if (microphoneActive()) return;
 			const ctype = resp.headers.get("content-type") || "";
 			if (!resp.ok) {
 				const data = await resp.json().catch(() => ({}));
 				throw new Error(data.message || ("HTTP " + resp.status));
 			}
+			const provider = resp.headers.get("X-DSH-GSV-Provider");
+			if (provider) firstAudioProbe = { key, provider, startedAt };
 			if (ctype.includes("application/x-ndjson")) {
-				const { count, error } = await readSpeakStream(resp, (seg, first) => {
-					if (first) {
-						player.play(key, [seg]);
-						player.beginStream(key);
-					} else {
-						player.push(key, [seg]);
-					}
-				});
-				player.endStream(key);
-				if (error) throw new Error(error);
-				if (count === 0) throw new Error("no audio");
+				try {
+					const { count, error } = await readSpeakStream(resp, (seg, first) => {
+						signal?.throwIfAborted();
+						if (first) {
+							player.play(key, [seg]);
+							player.beginStream(key);
+							onStart?.();
+						} else {
+							player.push(key, [seg]);
+						}
+					});
+					if (error) throw new Error(error);
+					if (count === 0) throw new Error("no audio");
+				} finally {
+					player.endStream(key);
+				}
 				return;
 			}
 			const data = await resp.json().catch(() => ({}));
+			signal?.throwIfAborted();
 			if (data.streamUrl) {
 				// 流式 WAV：<audio> 边下边播，首音≈引擎首块
 				player.play(key, [{ url: data.streamUrl, duration: 0, live: true }]);
+				onStart?.();
 				return;
 			}
 			let segments = data.segments;
@@ -739,11 +984,14 @@ const DEFAULT_PROVIDER_CATALOG = [
 			}
 			if (!segments || segments.length === 0) throw new Error(data.error || "no audio");
 			player.play(key, segments);
+			onStart?.();
 			if (data.error) throw new Error(data.error);
 		}
 
 		// 选中文字朗读：同样走流式 /speak（body.text），首音快
 		async function startSelectionRead(text) {
+			if (microphoneActive()) return;
+			const startedAt = performance.now();
 			if (activeSpeak) {
 				activeSpeak.abort();
 				activeSpeak = null;
@@ -753,13 +1001,13 @@ const DEFAULT_PROVIDER_CATALOG = [
 			const key = "selection:" + Date.now();
 			showPanel({ text });
 			try {
-				const resp = await fetch("/dsh-gsv-tts/speak", {
+				const resp = await pluginFetch("api/dsh-gsv-tts/speak", {
 					method: "POST",
-					headers: { "Content-Type": "application/json", "Accept": "audio/wav, application/x-ndjson;q=0.9" },
+					headers: { "Content-Type": "application/json", "Accept": acceptSpeech() },
 					body: JSON.stringify({ text }),
 					signal: ac.signal
 				});
-				await playSpeakResponse(resp, key);
+				await playSpeakResponse(resp, key, ac.signal, undefined, startedAt);
 			} catch (e) {
 				if (!(e && e.name === "AbortError")) {
 					try { console.warn("[dsh-gsv-tts] 朗读选中失败:", e); } catch { /* 忽略 */ }
@@ -816,9 +1064,12 @@ const DEFAULT_PROVIDER_CATALOG = [
 		}
 		function installSelectionMenu() {
 			if (typeof document === "undefined" || typeof window === "undefined") return () => {};
+			const capture = { capture: true };
+			let timer;
 			const onUp = (e) => {
 				if (gsvChip && e.target === gsvChip) return;
-				setTimeout(() => {
+				clearTimeout(timer);
+				timer = setTimeout(() => {
 					const info = selectionInfo();
 					if (!info) { hideChip(); return; }
 					const r = info.rect;
@@ -828,16 +1079,19 @@ const DEFAULT_PROVIDER_CATALOG = [
 			};
 			const onDown = (e) => { if (gsvChip && e.target === gsvChip) return; hideChip(); };
 			const onKey = (e) => { if (e.key === "Escape") hideChip(); };
-			document.addEventListener("mouseup", onUp, true);
-			document.addEventListener("mousedown", onDown, true);
-			document.addEventListener("keydown", onKey, true);
-			window.addEventListener("scroll", hideChip, true);
+			document.addEventListener("mouseup", onUp, capture);
+			document.addEventListener("mousedown", onDown, capture);
+			document.addEventListener("keydown", onKey, capture);
+			window.addEventListener("scroll", hideChip, capture);
 			return () => {
-				document.removeEventListener("mouseup", onUp, true);
-				document.removeEventListener("mousedown", onDown, true);
-				document.removeEventListener("keydown", onKey, true);
-				window.removeEventListener("scroll", hideChip, true);
+				document.removeEventListener("mouseup", onUp, capture);
+				document.removeEventListener("mousedown", onDown, capture);
+				document.removeEventListener("keydown", onKey, capture);
+				window.removeEventListener("scroll", hideChip, capture);
+				clearTimeout(timer);
 				hideChip();
+				gsvChip?.remove();
+				gsvChip = null;
 			};
 		}
 
@@ -852,6 +1106,8 @@ const DEFAULT_PROVIDER_CATALOG = [
 			const paused = active && player.state === "paused";
 			const progress = active ? player.progress() : null;
 			const onRead = react.useCallback(async () => {
+				if (microphoneActive()) return;
+				const startedAt = performance.now();
 				setBusy(true);
 				setFailure(null);
 				if (activeSpeak) {
@@ -862,13 +1118,13 @@ const DEFAULT_PROVIDER_CATALOG = [
 				activeSpeak = ac;
 				showPanel({ sessionId, messageId });
 				try {
-					const resp = await fetch("/dsh-gsv-tts/speak", {
+					const resp = await pluginFetch("api/dsh-gsv-tts/speak", {
 						method: "POST",
-						headers: { "Content-Type": "application/json", "Accept": "audio/wav, application/x-ndjson;q=0.9" },
+						headers: { "Content-Type": "application/json", "Accept": acceptSpeech() },
 						body: JSON.stringify({ sessionId, messageId }),
 						signal: ac.signal
 					});
-					await playSpeakResponse(resp, key);
+					await playSpeakResponse(resp, key, ac.signal, undefined, startedAt);
 				} catch (e) {
 					if (!(e && e.name === "AbortError")) setFailure(String((e && e.message) || e));
 				} finally {
@@ -956,6 +1212,8 @@ const DEFAULT_PROVIDER_CATALOG = [
 
 		// ─── 设置卡片（settings.plugin.item 插槽） ───
 		function TtsSettingsCard({ scope, t }) {
+			const lifetime = lifecycle?.signal;
+			const settingsFetch = (url, options) => pluginFetch(url, options, lifetime);
 			// 防御：settings 作用域异常（如服务端命名空间未注册）时显示错误而非整段空白
 			const [snapshot, setSnapshot] = react.useState(() => {
 				try {
@@ -966,7 +1224,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 			});
 			react.useEffect(() => {
 				try {
-					return scope.subscribe(() => setSnapshot(scope.getSnapshot()));
+					return onDeactivate(scope.subscribe(() => setSnapshot(scope.getSnapshot())), lifetime);
 				} catch {
 					return () => {};
 				}
@@ -977,7 +1235,11 @@ const DEFAULT_PROVIDER_CATALOG = [
 			const writable = !!(snapshot && snapshot.writable);
 			const [draft, setDraft] = react.useState(null);
 			const [saving, setSaving] = react.useState(false);
+			const [changingVoice, setChangingVoice] = react.useState(false);
+			const voiceWrite = react.useRef(false);
 			const [error, setError] = react.useState(null);
+			const [speechMetrics, setSpeechMetrics] = react.useState(null);
+			const [modelIntegrity, setModelIntegrity] = react.useState(null);
 			const [previewBusy, setPreviewBusy] = react.useState(null); // 单条:索引 | 批量:"all" | null
 			const [previewError, setPreviewError] = react.useState(null);
 			// ─── 音色市场状态：必须在下方提前 return 之前声明（hook 数量跨渲染一致，否则 React #310） ───
@@ -988,24 +1250,34 @@ const DEFAULT_PROVIDER_CATALOG = [
 			const [confirmInstall, setConfirmInstall] = react.useState(null); // { pkg }
 			const [confirmRemove, setConfirmRemove] = react.useState(null); // { id, name }
 			// ─── 4.0.0 简单模式状态（同样必须在提前 return 之前声明） ───
-			const [cloudVoices, setCloudVoices] = react.useState(null); // VoiceInfo[] | null
-			// 云端音色缓存：edge 只拉一次；deepseek 固定列表，无需请求
-			const cloudVoicesCache = react.useRef({ edge: null });
+			const [edgeVoices, setEdgeVoices] = react.useState([]);
 			const [providerHealth, setProviderHealth] = react.useState(null); // { available, rateLimited?, message? } | null
 			const [cloudBusy, setCloudBusy] = react.useState(null); // 'one' | 'all' | null
 			// 提供方目录：模式 Tab / 字段 / 能力由服务端 /provider/catalog 决定，客户端不再硬编码分支
 			const [providerCatalog, setProviderCatalog] = react.useState(DEFAULT_PROVIDER_CATALOG);
 			react.useEffect(() => {
 				let alive = true;
-				fetch("/dsh-gsv-tts/provider/catalog", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+				settingsFetch("api/dsh-gsv-tts/provider/catalog", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
 					.then((r) => r.json())
 					.then((d) => { if (alive && Array.isArray(d.providers) && d.providers.length) setProviderCatalog(d.providers); })
 					.catch(() => {});
-				return () => { alive = false; };
+				return onDeactivate(() => { alive = false; }, lifetime);
 			}, []);
 			const valueJson = JSON.stringify(value);
+			const previousValue = react.useRef(value);
 			react.useEffect(() => {
-				setDraft(structuredClone(value));
+				const previous = previousValue.current;
+				previousValue.current = value;
+				setDraft(current => {
+					const next = structuredClone(value);
+					for (const field of Object.keys(current || {})) {
+						if (JSON.stringify(current[field]) !== JSON.stringify(previous[field])
+							&& JSON.stringify(previous[field]) === JSON.stringify(value[field])) {
+							next[field] = current[field];
+						}
+					}
+					return next;
+				});
 			}, [valueJson]);
 			// provider 判定：迁移写回完成前默认按 gsv 展示（服务端已写回后快照即含 provider）
 			const provider = draft && providerCatalog.some((p) => p.id === draft.provider)
@@ -1014,28 +1286,26 @@ const DEFAULT_PROVIDER_CATALOG = [
 			// 目录驱动：能力决定显示哪些字段，而不是枚举 provider 名
 			const descriptor = providerCatalog.find((p) => p.id === provider) || DEFAULT_PROVIDER_CATALOG.find((p) => p.id === 'gsv') || DEFAULT_PROVIDER_CATALOG[0];
 			const caps = descriptor.capabilities;
-						// 云端音色与健康：deepseek 用内置列表（零网络），edge 列表拉一次后缓存
+			const cloudVoices = provider === "deepseek" ? DEEPSEEK_VOICE_OPTIONS : provider === "edge" ? edgeVoices : [];
+			// Edge 音色按需加载。DeepSeek 使用固定的内置列表。
 			react.useEffect(() => {
 				if (draft === null || !caps.network) return;
 				let alive = true;
-				if (provider === 'deepseek') {
-					setCloudVoices(DEEPSEEK_VOICE_OPTIONS.map((v) => ({ ...v })));
-				} else if (cloudVoicesCache.current.edge) {
-					setCloudVoices(cloudVoicesCache.current.edge);
-				}
+				setProviderHealth(null);
+				let loadedVoices = edgeVoices.length > 0;
 				const load = async () => {
-					if (provider === 'edge' && !cloudVoicesCache.current.edge) {
+					if (provider === 'edge' && !loadedVoices) {
 						try {
-							const vr = await fetch("/dsh-gsv-tts/provider/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+							const vr = await settingsFetch("api/dsh-gsv-tts/provider/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
 							const vd = await vr.json().catch(() => ({}));
 							if (alive && vd.voices && vd.voices.length) {
-								cloudVoicesCache.current.edge = vd.voices;
-								setCloudVoices(vd.voices);
+								loadedVoices = true;
+								setEdgeVoices(vd.voices);
 							}
 						} catch { /* 忽略 */ }
 					}
 					try {
-						const hr = await fetch("/dsh-gsv-tts/provider/health", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
+						const hr = await settingsFetch("api/dsh-gsv-tts/provider/health", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider }) });
 						const hd = await hr.json().catch(() => ({}));
 						if (alive) setProviderHealth({ available: !!hd.available, rateLimited: !!hd.rateLimited, message: hd.message || null });
 					} catch (e) {
@@ -1044,48 +1314,37 @@ const DEFAULT_PROVIDER_CATALOG = [
 				};
 				load();
 				const timer = setInterval(load, 60000); // 每分钟轻量刷新一次（服务端退避缓存）
-				return () => { alive = false; clearInterval(timer); };
+				return onDeactivate(() => { alive = false; clearInterval(timer); }, lifetime);
 			}, [provider, draft === null ? 0 : 1, provider === 'deepseek' ? String((draft && draft.deepseekApiKey) || '') : '']);
-			// 模式切换：先本地切（界面立即响应），持久化与列表加载放后台
-			const switchProvider = (kind) => {
-				if (kind === provider) return;
-				const next = { ...draft, provider: kind };
-				const target = providerCatalog.find((p) => p.id === kind) || DEFAULT_PROVIDER_CATALOG.find((p) => p.id === kind);
-				const targetCaps = target ? target.capabilities : { voiceSource: kind === 'gsv' ? 'presets' : 'remote' };
-				if (targetCaps.voiceSource === 'presets') {
-					const local = draft.voices || [];
-					next.defaultVoice = local.length ? local[0].name : '';
-				} else if (targetCaps.voiceSource === 'builtin') {
-					next.defaultVoice = (target && target.defaultVoice) || 'stella';
-					setCloudVoices(DEEPSEEK_VOICE_OPTIONS.map((v) => ({ ...v })));
-				} else {
-					const cached = cloudVoicesCache.current[kind];
-					if (cached && cached.length) {
-						setCloudVoices(cached);
-						next.defaultVoice = cached[0].id;
-					} else if (target && target.defaultVoice) {
-						next.defaultVoice = target.defaultVoice;
+			const persistVoice = async (kind, voice) => {
+				const resp = await settingsFetch("api/dsh-gsv-tts/settings/voice", {
+					method: "POST", headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ provider: kind, voice }),
+				});
+				const selection = await resp.json();
+				lifetime?.throwIfAborted();
+				if (!resp.ok) throw new Error(selection.message || t("saveRejected"));
+				setDraft(current => ({ ...current, ...selection }));
+			};
+			const changeVoice = async (kind, voice) => {
+				if (voiceWrite.current) return;
+				voiceWrite.current = true;
+				setChangingVoice(true);
+				setError(null);
+				try {
+					await persistVoice(kind, voice);
+					if (kind !== provider && kind === "gsv" && draft.engineMode === "always") {
+						void settingsFetch("api/dsh-gsv-tts/engine/start", { method: "POST" }).catch(() => {});
 					}
+				} catch (error) {
+					setError(String(error?.message || error));
+				} finally {
+					voiceWrite.current = false;
+					setChangingVoice(false);
 				}
-				setDraft(next); // 立即生效，不等网络
-				scope.set('provider', kind).catch((e) => setError(String((e && e.message) || e)));
-				// 同一份写入里落定默认音色：否则配置快照刷新会把草稿里的 defaultVoice 冲回旧值（下拉闪一下）
-				if (next.defaultVoice) scope.set('defaultVoice', next.defaultVoice).catch(() => {});
-				if (kind === 'gsv' && next.engineMode === 'always') {
-					fetch("/dsh-gsv-tts/engine/start", { method: "POST" }).catch(() => {});
-				}
-				if (kind === 'edge' && !cloudVoicesCache.current.edge) {
-					// 后台拉 Edge 音色：到达后再修正默认音色（不阻塞切换）
-					fetch("/dsh-gsv-tts/provider/voices", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: "edge" }) })
-						.then((r) => r.json())
-						.then((vd) => {
-							if (!vd.voices || !vd.voices.length) return;
-							cloudVoicesCache.current.edge = vd.voices;
-							setCloudVoices(vd.voices);
-							setDraft((d) => (d && d.provider === "edge" && !/^[a-z]{2,3}-/.test(String(d.defaultVoice || "")) ? { ...d, defaultVoice: vd.voices[0].id } : d));
-						})
-						.catch(() => {});
-				}
+			};
+			const switchProvider = kind => {
+				if (kind !== provider) void changeVoice(kind);
 			};
 			// ─── 云端音色试听：单条（当前选中）+ 全部（串行合成→排队播放，防限流） ───
 			const cloudPreview = async (voiceId) => {
@@ -1095,14 +1354,14 @@ const DEFAULT_PROVIDER_CATALOG = [
 				setCloudBusy("one");
 				setPreviewError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/provider/preview", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/provider/preview", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ voice: voiceId, provider })
 					});
 					const data = await resp.json().catch(() => ({}));
 					if (!resp.ok || !data.audioUrl) throw new Error(data.message || "no audio");
-					player.play(key, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
+					if (!lifetime?.aborted) player.play(key, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
 				} catch (e) {
 					setPreviewError(String((e && e.message) || e));
 				} finally {
@@ -1119,14 +1378,16 @@ const DEFAULT_PROVIDER_CATALOG = [
 					let first = true;
 					const errs = [];
 					for (const v of voices) {
+						if (lifetime?.aborted) return;
 						try {
-							const resp = await fetch("/dsh-gsv-tts/provider/preview", {
+							const resp = await settingsFetch("api/dsh-gsv-tts/provider/preview", {
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: JSON.stringify({ voice: v.id, provider })
 							});
 							const data = await resp.json().catch(() => ({}));
 							if (!resp.ok || !data.audioUrl) { errs.push(data.message || ("HTTP " + resp.status)); continue; }
+							if (lifetime?.aborted) return;
 							const seg = [{ url: data.audioUrl, duration: data.audioLen || 0 }];
 							if (first) { player.play("cloud:all", seg); first = false; }
 							else { player.enqueue("cloud:all", seg); }
@@ -1150,9 +1411,12 @@ const DEFAULT_PROVIDER_CATALOG = [
 			if (snapshot && snapshot.status === "loading") {
 				return jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 12, marginTop: 6 }, children: t("cardLoading") });
 			}
-			const voiceOptions = caps.voiceSource !== "presets"
-				? (cloudVoices || []).map((v) => ({ id: v.id, label: provider === "edge" ? v.name + " (" + v.id + ")" : v.name }))
+			const voiceOptions = provider === "custom" ? [] : caps.voiceSource !== "presets"
+				? cloudVoices.map((v) => ({ id: v.id, label: provider === "edge" ? v.name + " (" + v.id + ")" : v.name }))
 				: (draft.voices || []).map((v) => ({ id: v.name, label: v.name }));
+			if (provider === "edge" && voiceOptions.length && draft.defaultVoice && !voiceOptions.some(o => o.id === draft.defaultVoice)) {
+				voiceOptions.unshift({ id: draft.defaultVoice, label: draft.defaultVoice });
+			}
 			// 当前生效音色：显式选择优先，空则取第一个（与朗读实际行为一致）
 			const effectiveVoice = draft.defaultVoice || (voiceOptions.length ? voiceOptions[0].id : "");
 			const currentLabel = voiceOptions.find((o) => o.id === effectiveVoice)?.label || "";
@@ -1173,7 +1437,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				setPreviewBusy(i);
 				setPreviewError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/preview", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/preview", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ voice: { name: v.name ?? "", speakerAudioPath: v.speakerAudioPath ?? "", promptAudioPath: v.promptAudioPath ?? "", promptText: v.promptText ?? "" } })
@@ -1181,7 +1445,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 					const data = await resp.json().catch(() => ({}));
 					if (!resp.ok) throw new Error(data.message || ("HTTP " + resp.status));
 					if (!data.audioUrl) throw new Error("no audio");
-					player.play(key, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
+					if (!lifetime?.aborted) player.play(key, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
 				} catch (e) {
 					setPreviewError(String((e && e.message) || e));
 				} finally {
@@ -1197,7 +1461,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				try {
 					const results = await Promise.all(voices.map(async (v) => {
 						try {
-							const resp = await fetch("/dsh-gsv-tts/preview", {
+							const resp = await settingsFetch("api/dsh-gsv-tts/preview", {
 								method: "POST",
 								headers: { "Content-Type": "application/json" },
 								body: JSON.stringify({ voice: { name: v.name ?? "", speakerAudioPath: v.speakerAudioPath ?? "", promptAudioPath: v.promptAudioPath ?? "", promptText: v.promptText ?? "" } })
@@ -1211,7 +1475,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 					}));
 					const ok = results.filter((r) => r.url);
 					const errs = results.filter((r) => r.error);
-					if (ok.length > 0) player.play("preview:all", ok, { loop: true });
+					if (!lifetime?.aborted && ok.length > 0) player.play("preview:all", ok, { loop: true });
 					if (errs.length > 0) setPreviewError(errs.map((r) => r.error).join("；"));
 				} finally {
 					setPreviewBusy(null);
@@ -1227,7 +1491,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				setMarketLoading(true);
 				setMarketError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/registry/list", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/registry/list", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({})
@@ -1244,14 +1508,14 @@ const DEFAULT_PROVIDER_CATALOG = [
 			const marketPreview = async (pkg) => {
 				setMarketError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/preview", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/preview", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ voice: { name: pkg.name, speakerAudioPath: pkg.speaker, promptAudioPath: pkg.prompt, promptText: pkg.promptText } })
 					});
 					const data = await resp.json().catch(() => ({}));
 					if (!resp.ok || !data.audioUrl) throw new Error(data.message || "no audio");
-					player.play("market:" + pkg.id, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
+					if (!lifetime?.aborted) player.play("market:" + pkg.id, [{ url: data.audioUrl, duration: data.audioLen || 0 }]);
 				} catch (e) {
 					setMarketError(String((e && e.message) || e));
 				}
@@ -1260,7 +1524,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				setMarketBusy("install:" + pkg.id);
 				setMarketError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/registry/install", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/registry/install", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ id: pkg.id, confirm: confirm === true })
@@ -1285,7 +1549,7 @@ const DEFAULT_PROVIDER_CATALOG = [
 				setMarketBusy("remove:" + id);
 				setMarketError(null);
 				try {
-					const resp = await fetch("/dsh-gsv-tts/registry/remove", {
+					const resp = await settingsFetch("api/dsh-gsv-tts/registry/remove", {
 						method: "POST",
 						headers: { "Content-Type": "application/json" },
 						body: JSON.stringify({ id, deleteFiles })
@@ -1306,8 +1570,12 @@ const DEFAULT_PROVIDER_CATALOG = [
 				try {
 					const base = (snapshot && snapshot.base) || {};
 					let rejected = 0;
-					for (const field of ["apiUrl", "defaultVoice", "autoPlay", "interruptOnNew", "provider", "deepseekApiKey", "deepseekApiKeyEnv", "lexicon", "timeout", "installDir", "voices"]) {
+					for (const field of ["apiUrl", "autoPlay", "liveReply", "interruptOnNew",
+						"deepseekApiKey", "deepseekApiKeyEnv", "deepseekAutoCharsPerDay",
+						"customBaseUrl", "customModel", "customKeyRef", "customInstructions", "customFormat",
+						"gsvSpeed", "gsvModelManifest", "lexicon", "timeout", "installDir", "voices"]) {
 						const next = field === "deepseekApiKey" ? (draft.deepseekApiKey ?? "") : field === "deepseekApiKeyEnv" ? (draft.deepseekApiKeyEnv ?? "") : field === "lexicon" ? (draft.lexicon ?? "") : draft[field];
+						if (next === undefined) continue;
 						const baseVal = base[field];
 						// DSH 0.2：set/unset 返回宿主是否接受写入（false = 被拒绝），需要显式提示
 						const accepted = baseVal !== void 0 && JSON.stringify(next) === JSON.stringify(baseVal)
@@ -1316,6 +1584,9 @@ const DEFAULT_PROVIDER_CATALOG = [
 						if (accepted === false) rejected += 1;
 					}
 					if (rejected > 0) setError(t("saveRejected"));
+					else if ((draft.defaultVoice ?? "") !== (value.defaultVoice ?? "")) {
+						await persistVoice(provider, draft.defaultVoice ?? "");
+					}
 				} catch (e) {
 					setError(String((e && e.message) || e));
 				} finally {
@@ -1336,16 +1607,16 @@ const DEFAULT_PROVIDER_CATALOG = [
 					jsx.jsx("span", { style: { fontWeight: 600, fontSize: 13, color: "var(--dsw-alias-label-primary)" }, children: t("mode.title") + "：" }),
 					...providerCatalog.map((p) => jsx.jsx("button", {
 						type: "button",
-						disabled: !writable,
+						disabled: !writable || saving || changingVoice,
 						onClick: () => switchProvider(p.id),
 						style: { cursor: "pointer", border: "1px solid " + (provider === p.id ? "var(--dsw-alias-brand,#6e56cf)" : "var(--dsw-alias-border-l2)"), background: provider === p.id ? "var(--dsw-alias-interactive-bg-hover)" : "0 0", color: "var(--dsw-alias-label-secondary)", borderRadius: 14, padding: "4px 12px", fontSize: 12 },
 						children: p.i18nKey ? t(p.i18nKey) : p.label
 					}, p.id)),
 					jsx.jsx("span", { style: { fontSize: 12, fontWeight: 600, color: descriptor.badge === "local" ? "var(--dsw-alias-success, #30a46c)" : "var(--dsw-alias-label-tertiary)" }, children: descriptor.badge === "local" ? t("mode.badgeLocal") : descriptor.badge === "official" ? t("mode.badgeOfficial") : t("mode.badgeCloud") })
 				] }),
-				jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 11, marginTop: 4 }, children: provider === "deepseek" ? t("mode.officialDesc") : (provider === "edge" ? t("mode.quickDesc") : t("mode.proDesc")) }),
+				jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 11, marginTop: 4 }, children: provider === "deepseek" ? t("mode.officialDesc") : provider === "edge" ? t("mode.quickDesc") : provider === "custom" ? descriptor.description : t("mode.proDesc") }),
 				caps.network && providerHealth !== null && jsx.jsx("div", { style: { fontSize: 12, marginTop: 4, color: providerHealth.available ? "var(--dsw-alias-success, #30a46c)" : "var(--dsw-alias-danger, #e5484d)" }, children: providerHealth.available ? t("mode.healthOk") : (providerHealth.rateLimited ? t("mode.healthBusy") : (providerHealth.message || t("mode.healthDown"))) }),
-				caps.network && providerHealth !== null && !providerHealth.available && jsx.jsx("button", { type: "button", disabled: !writable, onClick: () => switchProvider("gsv"), style: linkBtn, children: t("mode.switchPro") }),
+				caps.network && providerHealth !== null && !providerHealth.available && jsx.jsx("button", { type: "button", disabled: !writable || saving || changingVoice, onClick: () => switchProvider("gsv"), style: linkBtn, children: t("mode.switchPro") }),
 				caps.needsKey && jsx.jsx(react.Fragment, { children: [
 					jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 11, marginTop: 6 }, children: t("field.apiKeyReuse") }),
 					jsx.jsx("label", { style: labelStyle, children: t("field.apiKey") }),
@@ -1354,16 +1625,38 @@ const DEFAULT_PROVIDER_CATALOG = [
 					jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft.deepseekApiKeyEnv ?? "", placeholder: "DEEPSEEK_API_KEY", onChange: (e) => patchField("deepseekApiKeyEnv", e.target.value) }),
 					jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 11, marginTop: 4 }, children: t("field.apiKeyRefHint") })
 				] }),
+				provider === "custom" && jsx.jsxs(react.Fragment, { children: [
+					...[
+						["customBaseUrl", "Base URL", "http://127.0.0.1:8880/v1"],
+						["customModel", "TTS model", "kokoro"],
+						["customKeyRef", "Credential reference", "CUSTOM_TTS_API_KEY"],
+						["customInstructions", "Voice instructions", ""],
+					].map(([field, label, placeholder]) => jsx.jsxs("label", { style: labelStyle, children: [
+						label, jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft[field] ?? "",
+							placeholder, onChange: e => patchField(field, e.target.value) })
+					] }, field)),
+					jsx.jsxs("label", { style: labelStyle, children: ["Response format",
+						jsx.jsxs("select", { style: inputStyle, disabled: !writable, value: draft.customFormat ?? "pcm",
+							onChange: e => patchField("customFormat", e.target.value), children: [
+								jsx.jsx("option", { value: "pcm", children: "PCM (24 kHz)" }),
+								jsx.jsx("option", { value: "wav", children: "WAV" })
+							] })
+					] })
+				] }),
 				jsx.jsx("label", { style: labelStyle, children: caps.voiceSource !== "presets" ? t("field.cloudVoice") : t("field.defaultVoice") }),
 				voiceOptions.length > 0
-					? jsx.jsx("select", { style: inputStyle, disabled: !writable, value: effectiveVoice, onChange: (e) => { const v = e.target.value; patchField("defaultVoice", v); try { scope.set("defaultVoice", v); } catch { /* 只读时忽略，保存按钮兜底 */ } }, children: [
+					? jsx.jsx("select", { style: inputStyle, disabled: !writable || changingVoice || saving, value: effectiveVoice, onChange: (e) => {
+						const voice = e.target.value;
+						if (provider === "gsv" && !(value.voices || []).some(preset => preset.name === voice)) patchField("defaultVoice", voice);
+						else void changeVoice(provider, voice);
+					}, children: [
 						...voiceOptions.map((o) => jsx.jsx("option", { key: o.id, value: o.id, children: o.label }))
 					] })
 					: jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft.defaultVoice ?? "", placeholder: t("field.defaultVoiceHint"), onChange: (e) => patchField("defaultVoice", e.target.value) }),
 				jsx.jsx("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: 11, marginTop: 4 }, children: t("currentVoice") + "：" + (currentLabel || t("voice.default")) }),
 				caps.voiceSource !== "presets" && jsx.jsx("div", { style: { display: "flex", gap: 12, alignItems: "center", marginTop: 4, flexWrap: "wrap" }, children: [
 					jsx.jsx("button", { type: "button", disabled: !effectiveVoice || cloudBusy === "one", onClick: () => cloudPreview(effectiveVoice), style: linkBtn, children: player.isActive("cloud:" + effectiveVoice) ? t("stop") : t("voice.preview") }),
-					jsx.jsx("button", { type: "button", disabled: cloudBusy === "all", onClick: cloudPreviewAll, style: linkBtn, children: player.isActive("cloud:all") ? t("stop") : t("voice.previewAllSeq") })
+					cloudVoices.length > 1 && jsx.jsx("button", { type: "button", disabled: cloudBusy === "all", onClick: cloudPreviewAll, style: linkBtn, children: player.isActive("cloud:all") ? t("stop") : t("voice.previewAllSeq") })
 				] }),
 				caps.voiceSource !== "presets" && previewError !== null && jsx.jsx("div", { style: { color: "var(--dsw-alias-danger, #e5484d)", fontSize: 12, marginTop: 6 }, children: previewError }),
 				// ─── 仅本地专业（GSV）模式的字段 ───
@@ -1373,12 +1666,51 @@ const DEFAULT_PROVIDER_CATALOG = [
 					jsx.jsx("label", { style: labelStyle, children: t("field.timeout") }),
 					jsx.jsx("input", { style: inputStyle, disabled: !writable, type: "number", value: draft.timeout ?? 30000, onChange: (e) => patchField("timeout", Number(e.target.value)) }),
 					jsx.jsx("label", { style: labelStyle, children: t("field.installDir") }),
-					jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft.installDir ?? "", onChange: (e) => patchField("installDir", e.target.value) })
+					jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft.installDir ?? "", onChange: (e) => patchField("installDir", e.target.value) }),
+					jsx.jsx("label", { style: labelStyle, children: t("field.synthesisSpeed") }),
+					jsx.jsx("input", { style: inputStyle, disabled: !writable, type: "number", min: .5, max: 2, step: .1,
+						value: draft.gsvSpeed ?? 1, onChange: e => patchField("gsvSpeed", Number(e.target.value)) }),
+					jsx.jsx("label", { style: labelStyle, children: t("field.modelManifest") }),
+					jsx.jsx("input", { style: inputStyle, disabled: !writable, value: draft.gsvModelManifest ?? "",
+						onChange: e => patchField("gsvModelManifest", e.target.value) }),
+					jsx.jsx("button", { type: "button", style: linkBtn, onClick: async () => {
+						try {
+							const response = await settingsFetch("api/dsh-gsv-tts/engine/model-integrity");
+							const result = await response.json();
+							setModelIntegrity(result.verified ? result.version + " · SHA-256 ✓ × " + result.checked
+								: result.message || "No manifest configured");
+						} catch (error) { setModelIntegrity(String(error)); }
+					}, children: t("field.modelIntegrity") }),
+					modelIntegrity && jsx.jsx("div", { role: "status", children: modelIntegrity })
 				] }),
 				jsx.jsx("label", { style: { ...labelStyle, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }, children: jsx.jsxs(react.Fragment, { children: [
 					jsx.jsx("input", { type: "checkbox", disabled: !writable, checked: !!draft.autoPlay, onChange: (e) => patchField("autoPlay", e.target.checked) }),
 					t("field.autoPlay")
 				] }) }),
+				jsx.jsxs("label", { style: labelStyle, children: [
+					jsx.jsx("input", { type: "checkbox", disabled: !writable || !draft.autoPlay, checked: !!draft.liveReply,
+						onChange: e => patchField("liveReply", e.target.checked) }), t("field.liveReply")
+				] }),
+				provider === "deepseek" && jsx.jsxs("label", { style: labelStyle, children: [
+					t("field.deepseekBudget"), jsx.jsx("input", { type: "number", min: 0, step: 1, style: inputStyle,
+						disabled: !writable, value: draft.deepseekAutoCharsPerDay ?? "",
+						onChange: e => patchField("deepseekAutoCharsPerDay", e.target.value === "" ? null : Number(e.target.value)) })
+				] }),
+				jsx.jsx("button", { type: "button", style: linkBtn, onClick: async () => {
+					try { setSpeechMetrics(await (await settingsFetch("api/dsh-gsv-tts/metrics")).json()); }
+					catch (error) { setSpeechMetrics({ message: String(error) }); }
+				}, children: t("field.usage") }),
+				speechMetrics && jsx.jsx("pre", { style: { whiteSpace: "pre-wrap", fontSize: 11 }, children:
+					speechMetrics.message || [
+						speechMetrics.day + " · DeepSeek: " + speechMetrics.deepseekCharacters + " (" +
+							speechMetrics.deepseekAutomaticCharacters + " auto)",
+						...(speechMetrics.providers || []).map(metric => metric.provider +
+							" · first P50/P95: " + (metric.firstAudioP50 ?? "—") + "/" + (metric.firstAudioP95 ?? "—") +
+							" ms · cancel P95: " + (metric.cancelP95 ?? "—") + " ms · cache: " + metric.cacheHits +
+							" · cancelled: " + (metric.cancellationRate == null ? "—" : Math.round(metric.cancellationRate * 100) + "%") +
+							" · errors: " + metric.failed)
+					].join("\n")
+				}),
 				jsx.jsx("label", { style: { ...labelStyle, display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }, children: jsx.jsxs(react.Fragment, { children: [
 					jsx.jsx("input", { type: "checkbox", disabled: !writable, checked: draft.interruptOnNew !== false, onChange: (e) => patchField("interruptOnNew", e.target.checked) }),
 					t("field.interruptOnNew")
@@ -1480,12 +1812,12 @@ const DEFAULT_PROVIDER_CATALOG = [
 				try { return scope.getSnapshot(); } catch { return null; }
 			});
 			react.useEffect(() => {
-				try { return scope.subscribe(() => setSnap(scope.getSnapshot())); } catch { return () => {}; }
+				try { return onDeactivate(scope.subscribe(() => setSnap(scope.getSnapshot()))); } catch { return () => {}; }
 			}, [scope]);
-			const sectionProvider = snap && snap.value && (snap.value.provider === "edge" || snap.value.provider === "deepseek") ? snap.value.provider : "gsv";
+			const sectionProvider = snap?.value?.provider || "gsv";
 			const refresh = react.useCallback(async () => {
 				try {
-					const resp = await fetch("/dsh-gsv-tts/engine/status");
+					const resp = await pluginFetch("api/dsh-gsv-tts/engine/status");
 					const data = await resp.json();
 					setStatus((s) => ({ ...s, loading: false, running: !!data.running, message: data.message || null }));
 				} catch (e) {
@@ -1495,33 +1827,43 @@ const DEFAULT_PROVIDER_CATALOG = [
 			react.useEffect(() => { refresh(); }, [refresh]);
 			const toggle = async () => {
 				const target = status.running ? "off" : "on";
+				const signal = lifecycle?.signal;
 				setStatus((s) => ({ ...s, busy: true, message: null, phase: target }));
+				const failed = e => {
+					if (!signal?.aborted) setStatus(s => ({ ...s, busy: false, phase: "idle", message: String(e?.message || e) }));
+				};
 				try {
-					const resp = await fetch("/dsh-gsv-tts/engine/" + (target === "on" ? "start" : "stop"), { method: "POST" });
+					const resp = await pluginFetch("api/dsh-gsv-tts/engine/" + (target === "on" ? "start" : "stop"), { method: "POST" });
 					const data = await resp.json();
 					if (target === "on" && !data.running) {
 						// 启动较慢：轮询直到就绪（最多 ~90s）
 						const deadline = Date.now() + 90000;
 						const poll = async () => {
+							if (signal?.aborted) return;
 							if (Date.now() > deadline) {
 								await refresh();
 								setStatus((s) => ({ ...s, busy: false, phase: "idle" }));
 								return;
 							}
-							const sResp = await fetch("/dsh-gsv-tts/engine/status");
+							const sResp = await pluginFetch("api/dsh-gsv-tts/engine/status");
 							const sData = await sResp.json();
 							if (sData.running) {
 								setStatus({ loading: false, running: true, busy: false, message: null, phase: "idle" });
 							} else {
-								setTimeout(poll, 3000);
+								let timer;
+								const cancel = onDeactivate(() => clearTimeout(timer));
+								if (!signal?.aborted) timer = setTimeout(() => {
+									cancel();
+									void poll().catch(failed);
+								}, 3000);
 							}
 						};
-						poll();
+						await poll();
 						return;
 					}
 					setStatus({ loading: false, running: !!data.running, busy: false, message: data.message || null, phase: "idle" });
 				} catch (e) {
-					setStatus((s) => ({ ...s, busy: false, phase: "idle", message: String((e && e.message) || e) }));
+					failed(e);
 				}
 			};
 			const rowStyle = { display: "flex", alignItems: "center", gap: 10, marginTop: 12 };
@@ -1633,52 +1975,106 @@ const DEFAULT_PROVIDER_CATALOG = [
 		}
 
 		// ─── 自动朗读轮询（常驻，仅 autoPlay 开启时生效；热更新读取最新配置） ───
-		let autoplayLastSeq = 0;
-		let autoplayInFlight = false;
-		async function pollAutoPlay(scope) {
-			let cfg;
-			try {
-				const snap = scope.getSnapshot();
-				cfg = (snap && snap.value) || {};
-			} catch {
-				return;
-			}
-			if (!cfg.autoPlay) return;
-			if (autoplayInFlight) return;
-			autoplayInFlight = true;
-			try {
-				const resp = await fetch("/dsh-gsv-tts/autoplay/poll", {
+		function AutoPlayObserver({ sessionId, scope }) {
+			react.useEffect(() => {
+				if (!sessionId) return;
+				const ac = new AbortController();
+				const keyPrefix = "autoplay:" + sessionId + ":";
+				let cursor;
+				let enabled = false;
+				let polling = false;
+				let pending = null;
+				let playingAttempt;
+				let lastPoll = -Infinity;
+				const post = (path, data, signal, accept) => pluginFetch("api/dsh-gsv-tts/autoplay/" + path, {
 					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({ sinceSeq: autoplayLastSeq })
+					headers: { "Content-Type": "application/json", ...(accept ? { Accept: accept } : {}) },
+					body: JSON.stringify({ sessionId, ...data }),
+					signal
 				});
-				const data = await resp.json().catch(() => ({}));
-				if (!resp.ok || typeof data.seq !== "number" || data.seq <= autoplayLastSeq) return;
-				autoplayLastSeq = data.seq;
-				if (!data.text) return;
-				const playing = player.state === "playing" || player.state === "paused" || player.state === "loading";
-					const speakResp = await fetch("/dsh-gsv-tts/autoplay/speak", {
-						method: "POST",
-						headers: { "Content-Type": "application/json", "Accept": "audio/wav" },
-						body: JSON.stringify({ seq: data.seq })
-					});
-					const audio = await speakResp.json().catch(() => ({}));
-					if (!speakResp.ok) return;
-					const segments = audio.streamUrl
-						? [{ url: audio.streamUrl, duration: 0, live: true }]
-						: audio.segments;
-					if (!segments || segments.length === 0) return;
-					if (playing && cfg.interruptOnNew === false) {
-						// 不打断：排入待播队列，当前队列读完后自动补读（避免叠音且不丢消息）
-						player.enqueue("autoplay:" + data.seq, segments);
-					} else {
-						player.play("autoplay:" + data.seq, segments);
+				const tick = async () => {
+					const cfg = scope.getSnapshot()?.value;
+					if (!cfg?.autoPlay) {
+						if (enabled) {
+							enabled = false;
+							cursor = undefined;
+							pending?.controller.abort();
+							pending = null;
+							if (player.key?.startsWith(keyPrefix)) player.stop();
+						}
+						return;
 					}
-			} catch {
-				// 网络抖动 / 引擎未启动：静默，下一轮再试
-			} finally {
-				autoplayInFlight = false;
-			}
+					enabled = true;
+					if (document.hidden || microphoneActive() || polling) return;
+					const now = performance.now();
+					if (now - lastPoll < (cfg.liveReply ? 245 : 1950)) return;
+					lastPoll = now;
+					polling = true;
+					try {
+						const sinceSeq = cursor;
+						const resp = await post("poll", { sinceSeq }, ac.signal);
+						if (!resp.ok) return;
+						const next = await resp.json();
+						if (!Number.isSafeInteger(next.seq) || ac.signal.aborted || cursor !== sinceSeq
+							|| !scope.getSnapshot()?.value?.autoPlay) return;
+						if (pending?.attempt && next.cancelled?.includes(pending.attempt)) {
+							pending.controller.abort();
+							pending = null;
+						}
+						if (playingAttempt && next.cancelled?.includes(playingAttempt) && player.key?.startsWith(keyPrefix)) player.stop();
+						if (!next.messageId) {
+							cursor = next.seq;
+							return;
+						}
+						if (pending?.seq === next.seq) return;
+						if (next.attemptId && (pending?.attempt === next.attemptId ||
+							(playingAttempt === next.attemptId && player.key?.startsWith(keyPrefix) && player.state !== "idle"))) return;
+						if (!cfg.interruptOnNew && (player.state !== "idle" || activeSpeak)) return;
+						activeSpeak?.abort();
+						const controller = new AbortController();
+						const item = { seq: next.seq, attempt: next.attemptId, controller };
+						pending = item;
+						activeSpeak = controller;
+						const signal = AbortSignal.any([ac.signal, controller.signal]);
+						void (async () => {
+							try {
+								const speech = await post("speak", { seq: next.seq, messageId: next.messageId }, signal,
+									acceptSpeech());
+								if (speech.status === 404) return; // 消息刚被回收，重新轮询。
+								await playSpeakResponse(speech, keyPrefix + next.messageId, signal, () => {
+									cursor = next.seq;
+									playingAttempt = next.attemptId;
+									showPanel(next.attemptId ? null : { sessionId, messageId: next.messageId });
+								}, now);
+							} catch (error) {
+								if (pending !== item) return;
+								cursor = next.seq; // 合成失败或主动取消后，不自动重复付费请求。
+								if (!signal.aborted) {
+									player.error = String(error?.message || error);
+									player._emit();
+								}
+							} finally {
+								if (pending === item) pending = null;
+								if (activeSpeak === controller) activeSpeak = null;
+							}
+						})();
+					} catch (error) {
+						if (!ac.signal.aborted) console.warn("[dsh-gsv-tts] 自动朗读轮询失败:", error);
+					} finally {
+						polling = false;
+					}
+				};
+				void tick();
+				const timer = setInterval(tick, 250);
+				const unsubscribe = scope.subscribe(() => { void tick(); });
+				return onDeactivate(() => {
+					clearInterval(timer);
+					unsubscribe();
+					ac.abort();
+					if (player.key?.startsWith(keyPrefix)) player.stop();
+				});
+			}, [sessionId, scope]);
+			return null;
 		}
 
 		// ─── 插件主体 ───
@@ -1693,6 +2089,8 @@ const DEFAULT_PROVIDER_CATALOG = [
 			}
 		}
 		function apply(ctx) {
+			lifecycle = new AbortController();
+			const controller = lifecycle;
 			const t = ctx.locale.bind(NS);
 			ctx.effect(() => ctx.locale.register(NS, { zh, en }), "gsv-tts: dictionaries");
 			// 朗读按钮
@@ -1717,15 +2115,42 @@ const DEFAULT_PROVIDER_CATALOG = [
 			}, EngineSection));
 			// 整段播放/下载面板 + 选中文字朗读浮钮（默认流式朗读，只有点「整段」才生成完整文件）
 			ctx.effect(() => {
+				const hasDocument = typeof document !== "undefined";
+				if (hasDocument) installActionStyles();
+				const unlock = hasDocument && typeof window !== "undefined" ? installAudioUnlock() : () => {};
 				ensurePanel();
-				return installSelectionMenu();
+				const selection = installSelectionMenu();
+				const microphone = typeof MutationObserver !== "undefined" && typeof document !== "undefined"
+					? new MutationObserver(() => {
+						if (microphoneActive() && (player.state !== "idle" || activeSpeak || fullAbort)) stopPlayback();
+					}) : null;
+				if (microphone && document.body) microphone.observe(document.body,
+					{ childList: true, subtree: true, attributes: true, attributeFilter: ["data-voice-activity"] });
+				return () => {
+					controller.abort();
+					selection();
+					unlock();
+					microphone?.disconnect();
+					unsubscribePanel?.();
+					unsubscribePanel = null;
+					stopPlayback();
+					player.listeners.clear();
+					fullCtx = fullUrl = null;
+					gsvPanel?.remove();
+					gsvPanel = null;
+					panelStyle?.remove();
+					panelStyle = null;
+					actionStyle?.remove();
+					actionStyle = null;
+					globalThis.CSS?.highlights?.delete("dsh-gsv-sentence");
+				};
 			}, "gsv-tts: player-panel");
-			// 自动朗读轮询器：每 2s 轻量探测一次新回复（autoPlay 关闭时无网络请求）
 			const scope = bindSettingsScope(ctx);
-			ctx.effect(() => {
-				const timer = setInterval(() => pollAutoPlay(scope), 2000);
-				return () => clearInterval(timer);
-			}, "gsv-tts: autoplay");
+			ctx.slots.inject("conversation.input.overlay", () => ctx.slots.register({
+				name: "conversation.input.overlay",
+				id: "dsh-gsv-tts-autoplay",
+				inject: sessionId => ({ sessionId, scope })
+			}, AutoPlayObserver));
 		}
 
 		exports.apply = apply;

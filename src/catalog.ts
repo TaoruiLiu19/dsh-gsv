@@ -81,7 +81,7 @@ export const PROVIDER_CATALOG: readonly ProviderDescriptor[] = [
     defaultVoice: 'stella',
     voiceIdPattern: '^(stella|tide)$',
     capabilities: {
-      streaming: false,
+      streaming: true,
       cloning: false,
       customVoices: false,
       network: true,
@@ -90,6 +90,18 @@ export const PROVIDER_CATALOG: readonly ProviderDescriptor[] = [
       billed: true,
       formats: ['wav'],
       voiceSource: 'builtin',
+    },
+  },
+  {
+    id: 'custom',
+    label: '自定义 TTS',
+    i18nKey: 'mode.custom',
+    description: '连接现有 OpenAI-compatible 语音服务',
+    badge: 'cloud',
+    defaultVoice: 'af_sarah',
+    capabilities: {
+      streaming: true, cloning: false, customVoices: false, network: true, needsKey: false,
+      needsEngine: false, billed: false, formats: ['wav'], voiceSource: 'builtin',
     },
   },
   {
@@ -165,7 +177,7 @@ export interface EngineDescriptor {
   label: string;
   apiUrl: string;
   repoUrl: string;
-  /** 启动脚本相对路径（installDir 下） */
+  /** 启动脚本相对插件包根目录的路径 */
   startScript: string;
   models: EngineModelSpec[];
 }
@@ -175,7 +187,7 @@ export const GSV_ENGINE: EngineDescriptor = {
   label: 'GSV-TTS-Lite',
   apiUrl: 'http://localhost:9880',
   repoUrl: 'https://github.com/chinokikiss/GSV-TTS-Lite',
-  startScript: 'API/dsh_stream_api.py',
+  startScript: 'scripts/dsh_stream_api.py',
   models: [
     { file: 's1v3.ckpt', label: 'GPT 权重 s1v3.ckpt', required: true },
     { file: 's2Gv2ProPlus.pth', label: 'SoVITS 权重 s2Gv2ProPlus.pth', required: true },

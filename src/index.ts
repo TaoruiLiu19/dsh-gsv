@@ -1,24 +1,23 @@
 import Schema from '@deepseek-ai/schemastery';
 import { defineTool } from '@deepseek-ai/dsh-tools';
-import { randomUUID } from 'node:crypto';
-import { once } from 'node:events';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { TTSService } from './tts.service.js';
 import { VoiceManager } from './voice-manager.js';
 import { EngineSetup } from './setup.js';
 import { AudioStore } from './audio-store.js';
-import { EngineManager } from './engine-manager.js';
-import { TextCleaner, MAX_SEGMENTED_TEXT_LENGTH } from './text-cleaner.js';
+import { EngineManager, enginePaths } from './engine-manager.js';
 import { VoiceRegistryManager } from './voice-registry.js';
 import { resolveProvider } from './migration.js';
 import { SCHEMA_VERSION, snapshotConfig, storedProvider } from './config.js';
-import { wavHeader, float32ToInt16 } from './wav-stream.js';
 import { DeepseekProvider } from './providers/deepseek.js';
+import { CustomSpeechProvider } from './providers/custom.js';
+import { SpeechStats, usageLedgerPath } from './speech-stats.js';
+import { GsvProvider } from './providers/gsv.js';
+import { registerPlaybackRoutes } from './playback-routes.js';
+import { selectVoice } from './voice-selection.js';
 import {
   GSV_ENGINE,
-  PROVIDER_CATALOG,
   defaultVoiceFor,
   getProviderDescriptor,
   isValidVoiceId,
@@ -26,10 +25,10 @@ import {
 } from './catalog.js';
 import { entriesForProvider, parseLexicon, previewLexicon } from './lexicon.js';
 import { buildDoctorReport, describeCredentialSource, type EngineFacts, type SetupFacts } from './doctor.js';
-import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult, VoicePreset } from './types.js';
+import type { Config as PluginConfig, HealthCheckResult, ProviderKind, SetupResult } from './types.js';
 
 export const name = 'dsh-gsv-tts';
-export const inject = ['tools', 'webServer', 'settings'];
+export const inject = ['tools', 'webServer', 'settings', 'sessions', 'connection'];
 
 /** 插件 profile 条目 id（= 设置命名空间）；正常安装即包名。 */
 const DEFAULT_ENTRY_ID = 'dsh-gsv-tts';
@@ -57,17 +56,27 @@ export const Config: any = Schema.object({
     source: Schema.string().description('音色来源：user 自定义 / registry 注册表安装').default('user'),
   })).default([]).description('音色预设列表，可在设置中自定义')),
   defaultVoice: live(Schema.string().description('默认音色（gsv=预设名 / edge=云端音色 id / deepseek=官方音色 stella|tide，留空用第一个）').default('')),
+  voiceByProvider: live(Schema.dict(Schema.string()).default({}).description('各提供方上次保存的音色')),
   autoPlay: live(Schema.boolean().default(false).description('是否自动朗读助手回复')),
+  liveReply: live(Schema.boolean().default(false).description('生成中的正文逐句朗读')),
   engineMode: live(Schema.union([Schema.const('always'), Schema.const('eco')]).default('eco').description('引擎启动方式：always=常驻模式（性能优先，自动启动并预热）/ eco=节能模式（资源优先，不后台启动，与旧版一致）')),
-  interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则朗读中跳过新回复，避免叠音）')),
+  interruptOnNew: live(Schema.boolean().default(true).description('自动朗读时，新回复是否打断当前朗读（关闭则按顺序朗读）')),
   timeout: live(Schema.number().min(1).default(30000).description('请求超时时间（毫秒）')),
   installDir: live(Schema.string().default('./GSV-TTS-Lite').description('GSV-TTS-Lite 引擎安装目录')),
   voiceRegistryUrl: live(Schema.string().default('https://taoruiliu19.github.io/gsv-market/voices.json').description('音色市场远端清单地址（默认指向在线试听站点；留空则仅用包内离线清单）')),
   schemaVersion: live(Schema.number().default(SCHEMA_VERSION).description('配置结构版本')),
-  provider: live(Schema.union(providerIds().map((id) => Schema.const(id))).description('TTS 引擎：由 src/catalog.ts 目录定义（gsv 本地克隆 / edge 云端 / deepseek 官方语音）')),
+  provider: live(Schema.union(providerIds().map((id) => Schema.const(id))).description('TTS 提供方（本地 GSV、Edge、官方 DeepSeek 或自定义兼容服务）')),
   deepseekApiKey: live(Schema.string().default('').description('DeepSeek 官方语音 API Key（可选覆盖；留空默认复用 Harness 凭据服务里的 DEEPSEEK_API_KEY）')),
   lexicon: live(Schema.string().default('').description('发音词典：每行 原词=读法，# 开头为注释；对所有模式生效（如 DSH=DeepSeek）')),
   deepseekApiKeyEnv: live(Schema.string().default('DEEPSEEK_API_KEY').description('凭据引用名：默认复用 Harness 已保存的 DEEPSEEK_API_KEY（模型设置页那个），留空则不查凭据服务')),
+  deepseekAutoCharsPerDay: live(Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('每日 DeepSeek 自动朗读计费字符上限（留空不限，0 禁止自动合成）')),
+  customBaseUrl: live(Schema.string().default('').description('兼容 TTS 的 Base URL，例如 http://127.0.0.1:8880/v1')),
+  customModel: live(Schema.string().default('kokoro')),
+  customKeyRef: live(Schema.string().default('').description('DSH 凭据引用名，留空不发送密钥')),
+  customInstructions: live(Schema.string().default('').description('后端支持时使用的语气、情绪或停顿指令')),
+  customFormat: live(Schema.union([Schema.const('pcm'), Schema.const('wav')]).default('pcm')),
+  gsvSpeed: live(Schema.number().min(0.5).max(2).default(1).description('GSV 合成语速')),
+  gsvModelManifest: live(Schema.string().default('').description('可信模型版本与 SHA-256 的 JSON 清单路径')),
   quotaDaily: live(Schema.union([Schema.number().min(0), Schema.const(null)]).default(null).description('云端简单模式每日配额（null=不限量，仅引导用）')),
 });
 
@@ -88,31 +97,33 @@ export function apply(ctx: any, config: any) {
     return undefined;
   };
 
-  const audioStore = new AudioStore(audioOrigin);
+  const hostPath = ctx.get?.('dshHomePath');
+  const dshHomePath = typeof hostPath === 'function' ? hostPath as (...segments: string[]) => string : undefined;
+  const scope = JSON.stringify([dshHomePath?.() ?? process.env.DSH_HOME ?? '', entryId]);
+  const audioStore = new AudioStore(audioOrigin, scope);
+  const stats = new SpeechStats(usageLedgerPath(dshHomePath, audioStore.profileDirectory));
   const voiceManager = new VoiceManager(readConfig);
-  // 凭据服务（可能存在也可能不存在）：用于复用 Harness 已保存的 DEEPSEEK_API_KEY，
-  // 与模型鉴权读取同一份凭据，用户在插件里不必再填一次 Key。
-  const credentialsOf = () => {
-    try {
-      return ctx.get?.('credentials');
-    } catch {
-      return undefined;
-    }
-  };
-  const deepseekProvider = new DeepseekProvider({ getConfig: () => readConfig(), credentials: credentialsOf });
-  const tts = new TTSService(readConfig, audioStore, {
+  const engineManager = new EngineManager(readConfig);
+  ctx.effect(() => () => engineManager.dispose());
+  ctx.effect(() => () => audioStore.dispose());
+  ctx.effect(() => () => stats.dispose());
+  const setup = new EngineSetup(readConfig, engineManager);
+  const deepseek = new DeepseekProvider({ getConfig: readConfig, credentials: () => ctx.get?.('credentials') });
+  const gsv = new GsvProvider({
+    getConfig: readConfig,
     voiceManager,
-    deepseek: deepseekProvider,
-    onFailure: (e) => noteFailure(e),
+    headers: apiUrl => engineManager.headers(apiUrl),
+    health: async () => {
+      const status = await engineManager.status();
+      return { available: status.running, message: status.message };
+    },
   });
-  const setup = new EngineSetup(readConfig);
-  // 引擎进程管理：单实例跨配置热更新存活（避免重载丢失子进程引用）
-  const engineManager = new EngineManager();
-  const engineCtl = () => {
-    const cfg = readConfig();
-    engineManager.configure(cfg.apiUrl, cfg.installDir);
-    return engineManager;
+  let lastFailure: { at: number; provider: string; message: string } | null = null;
+  const noteFailure = (error: unknown): void => {
+    lastFailure = { at: Date.now(), provider: readConfig().provider, message: String((error as Error)?.message ?? error).slice(0, 300) };
   };
+  const custom = new CustomSpeechProvider(readConfig, () => ctx.get?.('credentials'));
+  const tts = new TTSService(readConfig, audioStore, { voiceManager, deepseek, custom, gsv, stats, onFailure: noteFailure });
 
   // 引擎启动后预热默认音色：缓存 speaker/prompt 特征 + 一次短推理，
   // 让用户第一次点朗读时不再付首次特征计算/首次推理的开销。
@@ -128,7 +139,7 @@ export function apply(ctx: any, config: any) {
     }
   };
 
-  // 插件加载时后台拉起引擎（默认开启，可在设置里关闭），把 15–90 秒模型加载移出点击路径。
+  // 常驻模式在后台启动并尝试预热。节能模式需要手动启动。
   let autoStartStarted = false;
   const autoStartEngine = async (): Promise<void> => {
     if (autoStartStarted) return;
@@ -136,71 +147,42 @@ export function apply(ctx: any, config: any) {
     const cfg = readConfig();
     if (cfg.provider !== 'gsv' || cfg.engineMode !== 'always') return;
     try {
-      const result = await engineCtl().start();
+      const result = await engineManager.start(cfg);
       if (result.ok) void prewarmDefaultVoice();
     } catch {
       // 引擎启动失败时保持原状，用户仍可手动启动
     }
   };
-  setTimeout(() => { void autoStartEngine(); }, 1500);
+  ctx.effect(() => {
+    const timer = setTimeout(() => { void autoStartEngine(); }, 1500);
+    return () => clearTimeout(timer);
+  });
 
-  // 兼容旧配置：provider 是云端（edge/deepseek）但 defaultVoice 仍是另一种模式的音色时，
-  // 云端口播会以 1007 / 400 失败。自动把默认音色修成该模式的默认音色（gsv 配置不动）。
+  // 旧设置首次启动时为当前提供方保存已有音色，修复不适用的云端音色。
   ctx.effect(() => {
     let disposed = false;
     const run = async () => {
       try { await ctx.root?.loader?.await?.(); } catch { /* 精简宿主 */ }
       if (disposed) return;
       const cfg = readConfig();
-      if (!cfg.defaultVoice) return;
       const descriptor = getProviderDescriptor(cfg.provider);
       if (!descriptor) return;
-      // 本地预设名称是任意字符串；只有声明了 voiceIdPattern 的 provider 才需要修
-      if (descriptor.capabilities.voiceSource === 'presets') return;
-      if (isValidVoiceId(cfg.provider, cfg.defaultVoice)) return;
-      const fallback = descriptor.defaultVoice;
-      if (!fallback) return;
+      const raw = storedProvider(config?.provider);
+      const migrate = typeof raw !== 'string' || !providerIds().includes(raw as ProviderKind);
+      const provider = migrate ? resolveProvider(raw, cfg.voices) : cfg.provider;
+      const invalid = descriptor.capabilities.voiceSource !== 'presets' && Boolean(cfg.defaultVoice)
+        && !isValidVoiceId(provider, cfg.defaultVoice);
+      if (!migrate && !invalid) return;
       try {
-        await ctx.settings.update(entryId, { defaultVoice: fallback });
+        const patch = selectVoice(cfg, provider, invalid ? defaultVoiceFor(provider) : undefined);
+        await ctx.settings.update(entryId, { ...patch, ...(migrate ? { schemaVersion: SCHEMA_VERSION } : {}) });
       } catch {
         // 只读部署或设置服务未就绪：运行时仍由对应 Provider 回退
       }
     };
     void run();
     return () => { disposed = true; };
-  }, 'gsv-tts: repair-cloud-voice');
-
-  // 自动朗读通知状态：服务端只在有新回复时递增 seq 并暂存清洗后的文本，
-  // 由前端轮询 /autoplay/poll 感知并按需触发合成播放（打断策略在前端执行）。
-  const autoPlay = { seq: 0, text: null as string | null };
-
-  // 5.0.0 provider 迁移守卫：旧配置没有 provider 字段时落定一次并写回设置，
-  // 之后设置面板切换直接走 settings.update，运行态始终读最新值。
-  ctx.effect(() => {
-    let disposed = false;
-    const run = async () => {
-      try {
-        // 等 Loader 挂载完成：设置服务只对已激活条目暴露 describe/update。
-        await ctx.root?.loader?.await?.();
-      } catch {
-        // 精简宿主 / 测试环境没有 loader：直接执行
-      }
-      if (disposed) return;
-      try {
-        const raw = storedProvider(config?.provider);
-        if (typeof raw === 'string' && providerIds().includes(raw as ProviderKind)) return;
-        const provider = resolveProvider(raw, readConfig().voices);
-        await ctx.settings.update(entryId, { provider, schemaVersion: SCHEMA_VERSION });
-        ctx.logger?.info?.('dsh-gsv-tts 已落定 provider=%s', provider);
-      } catch (e) {
-        ctx.logger?.warn?.('dsh-gsv-tts provider 迁移写回失败', e);
-      }
-    };
-    void run();
-    return () => {
-      disposed = true;
-    };
-  }, 'gsv-tts: provider migration');
+  }, 'gsv-tts: migrate voice settings');
 
   // 音色注册表核心（工具与 HTTP 路由共享）：写回走 settings.update → volatile 配置就地热更新
   const voiceRegistry = new VoiceRegistryManager({
@@ -210,742 +192,11 @@ export function apply(ctx: any, config: any) {
     },
   });
 
-  /** 当前 provider 的默认音色：云端（edge/deepseek）→ defaultVoice 或空串（服务端回落默认）；gsv → 本地预设或 null。 */
-  const resolveVoice = (): VoicePreset | string | null => {
-    const cfg = readConfig();
-    if (cfg.provider !== 'gsv') return cfg.defaultVoice || '';
-    const preset = voiceManager.get();
-    return preset ?? null;
-  };
-
-  /** 合成失败分支：gsv 时优先给出"引擎未启动"明确原因；edge 时原样返回云端错误。 */
-  /** 最近一次合成失败：供 tts_doctor 解释为什么没声音；写盘以便插件重载后仍可诊断。 */
-  const LAST_FAILURE_FILE = join(tmpdir(), 'dsh-gsv-tts-last-failure.json');
-  let lastFailure: { at: number; provider: string; message: string } | null = null;
-  try {
-    const saved = JSON.parse(readFileSync(LAST_FAILURE_FILE, 'utf8')) as { at?: number; provider?: string; message?: string };
-    if (saved && typeof saved.at === 'number' && Date.now() - saved.at < 24 * 60 * 60 * 1000 && saved.message) {
-      lastFailure = { at: saved.at, provider: String(saved.provider ?? ''), message: String(saved.message) };
-    }
-  } catch {
-    // 没有历史失败或文件损坏：忽略
-  }
-  const noteFailure = (e: unknown): void => {
-    lastFailure = {
-      at: Date.now(),
-      provider: readConfig().provider,
-      message: String((e as Error)?.message ?? e).slice(0, 300),
-    };
-    try {
-      writeFileSync(LAST_FAILURE_FILE, JSON.stringify(lastFailure));
-    } catch {
-      // 诊断写盘失败不影响主流程
-    }
-  };
-
-  const failSynthesis = async (res: any, e: unknown): Promise<void> => {
-    noteFailure(e);    const msg = String((e as Error)?.message ?? e);
-    if (readConfig().provider === 'gsv') {
-      const engineStatus = await engineCtl().status();
-      if (!engineStatus.running) {
-        res.writeHead(503, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: '语音引擎未启动，请到 设置 → 引擎 打开开关' }));
-        return;
-      }
-    }
-    res.writeHead(500, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ message: msg }));
-  };
-
-  // 注册音频文件路由（同源，浏览器可直接播放；插件卸载时自动注销）
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix',
-    path: '/dsh-gsv-tts/audio',
-    handler: (req: any, res: any) => audioStore.serve(req, res),
-  }));
-
-  // 流式朗读：返回未知长度的 WAV，浏览器 <audio> 边下边播；断开即中断引擎。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'prefix',
-    path: '/dsh-gsv-tts/speak/stream',
-    handler: async (req: any, res: any) => {
-      const token = new URL(String(req.url ?? '/'), 'http://localhost').searchParams.get('token') ?? '';
-      const entry = streamTokens.get(token);
-      if (!entry || entry.expires < Date.now()) {
-        streamTokens.delete(token);
-        json(res, 404, { message: '朗读流已过期，请重新点击朗读' });
-        return;
-      }
-      streamTokens.delete(token);
-
-      const ac = new AbortController();
-      let closed = false;
-      res.on?.('close', () => {
-        closed = true;
-        ac.abort();
-      });
-      try {
-        let headerSent = false;
-        for await (const chunk of tts.streamPcm(entry.text, entry.voice, ac.signal)) {
-          if (closed) break;
-          if (!headerSent) {
-            res.writeHead(200, {
-              'Content-Type': 'audio/wav',
-              'Cache-Control': 'no-store',
-              'X-Accel-Buffering': 'no',
-              'Accept-Ranges': 'none',
-            });
-            res.write(wavHeader(chunk.sampleRate));
-            headerSent = true;
-          }
-          if (!res.write(float32ToInt16(chunk.data))) {
-            await Promise.race([once(res, 'drain'), once(res, 'close')]);
-          }
-        }
-        if (closed) {
-          try { res.end(); } catch { /* 已断开 */ }
-          return;
-        }
-        if (!headerSent) {
-          json(res, 500, { message: '引擎没有返回音频数据' });
-          return;
-        }
-        res.end();
-      } catch (e: any) {
-        if (!res.headersSent) json(res, 500, { message: String(e?.message ?? e) });
-        else {
-          try { res.end(); } catch { /* 已断开 */ }
-        }
-      }
-    },
-  }));
-
-  // 引擎启停（设置 → 引擎 开关调用）
-  const json = (res: any, status: number, body: unknown) => {
-    res.writeHead(status, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(body));
-  };
-
-  /** 客户端是否请求流式 WAV（<audio> 直接播放，首音≈引擎首块）。 */
-  const wantsWavStream = (req: any): boolean => {
-    const accept = String(req?.headers?.accept ?? '');
-    const url = String(req?.url ?? '');
-    return accept.includes('audio/wav') || /[?&]stream=wav(?:&|$)/.test(url);
-  };
-
-  // 流式 WAV 的一次性令牌：POST /speak 只做文本/音色解析并返回 URL，
-  // 真正的合成为 GET，浏览器 <audio> 可边下边播，且不会把长文本塞进 URL。
-  const streamTokens = new Map<string, { text: string; voice: VoicePreset; expires: number }>();
-  const createStreamToken = (text: string, voice: VoicePreset): string => {
-    const now = Date.now();
-    for (const [key, value] of streamTokens) {
-      if (value.expires < now || streamTokens.size > 64) streamTokens.delete(key);
-    }
-    const token = randomUUID();
-    streamTokens.set(token, { text, voice, expires: now + 60000 });
-    return token;
-  };
-
-  /** 客户端是否请求流式朗读（NDJSON）。 */
-  const wantsStream = (req: any): boolean => {
-    const accept = String(req?.headers?.accept ?? '');
-    const url = String(req?.url ?? '');
-    return accept.includes('application/x-ndjson') || /[?&]stream=1(?:&|$)/.test(url);
-  };
-
-  /**
-   * 流式朗读：按段合成，每段完成立刻以 NDJSON 推给浏览器。
-   * 首段完成即可开始播放，不必等整条回复全部分段合成完。
-   */
-  const streamSegments = async (req: any, res: any, text: string, voice: VoicePreset | string): Promise<void> => {
-    let parts: string[];
-    try {
-      parts = tts.planSegments(text);
-    } catch (e: any) {
-      json(res, 400, { message: String(e?.message ?? e) });
-      return;
-    }
-    const ac = new AbortController();
-    let closed = false;
-    const onClose = () => {
-      // 客户端停止/切歌/关页：中断引擎，避免旧请求占着推理锁
-      closed = true;
-      ac.abort();
-    };
-    res.on?.('close', onClose);
-    res.writeHead(200, {
-      'Content-Type': 'application/x-ndjson; charset=utf-8',
-      'Cache-Control': 'no-store',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-    const send = (obj: Record<string, unknown>) => {
-      if (closed) return;
-      try {
-        res.write(JSON.stringify(obj) + '\n');
-      } catch {
-        // 连接已断，交给 close 事件收尾
-      }
-    };
-    send({ type: 'start', total: parts.length });
-    let totalLen = 0;
-    try {
-      for (let i = 0; i < parts.length; i++) {
-        const r = await tts.synthesize(parts[i], voice, ac.signal);
-        totalLen += r.audioLen;
-        send({ type: 'segment', index: i, total: parts.length, url: r.audioUrl, duration: r.audioLen });
-      }
-      send({ type: 'done', totalLen });
-    } catch (e: any) {
-      if (!ac.signal.aborted) send({ type: 'error', message: String(e?.message ?? e) });
-    } finally {
-      res.off?.('close', onClose);
-      try {
-        res.end();
-      } catch {
-        // 已关闭
-      }
-    }
-  };
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/engine/status',
-    handler: async (_req: any, res: any) => {
-      try {
-        json(res, 200, await engineCtl().status());
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/engine/start',
-    handler: async (_req: any, res: any) => {
-      try {
-        const result = await engineCtl().start();
-        if (result.ok) void prewarmDefaultVoice();
-        json(res, 200, result);
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/engine/stop',
-    handler: async (_req: any, res: any) => {
-      try {
-        json(res, 200, await engineCtl().stop());
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-
-  // ─── Provider 信息（4.0.0 简单模式） ───
-  // 当前 provider 的音色列表（客户端下拉数据源）
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/provider/voices',
-    handler: async (req: any, res: any) => {
-      try {
-        // 切换模式时客户端会在写回配置前先取目标 provider 的音色，
-        // 因此允许 body/query 显式指定；未指定时用当前配置。
-        const body = (await readJson(req).catch(() => ({}))) as Record<string, unknown>;
-        const url = new URL(String(req.url ?? '/'), 'http://localhost');
-        const requested = body.provider ?? url.searchParams.get('provider');
-        const provider: ProviderKind =
-          typeof requested === 'string' && getProviderDescriptor(requested)
-            ? (requested as ProviderKind)
-            : readConfig().provider;
-        json(res, 200, { provider, voices: await tts.listVoices(provider) });
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  // 当前 provider 的健康（edge = 试合成退避；deepseek = 免费 /models 探活；gsv = 引擎状态）
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/provider/health',
-    handler: async (req: any, res: any) => {
-      try {
-        // 切换模式时客户端可能在写回配置前先探目标 provider，因此允许显式指定
-        const body = (await readJson(req).catch(() => ({}))) as { provider?: unknown };
-        const requested = body.provider;
-        const provider: ProviderKind =
-          typeof requested === 'string' && getProviderDescriptor(requested)
-            ? (requested as ProviderKind)
-            : readConfig().provider;
-        json(res, 200, { provider, ...(await tts.health(provider)) });
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  // 提供方目录：客户端据此渲染模式 Tab、字段与能力，避免在 UI 里硬编码 provider 分支
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/provider/catalog',
-    handler: async (_req: any, res: any) => {
-      try {
-        json(res, 200, {
-          providers: PROVIDER_CATALOG,
-          engines: [GSV_ENGINE],
-          current: readConfig().provider,
-        });
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-
-  // 词典预览：只做文本替换，不合成、不产生费用；可传草稿 lexicon 预览未保存的规则
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/lexicon/preview',
-    handler: async (req: any, res: any) => {
-      try {
-        const body = (await readJson(req)) as { text?: unknown; lexicon?: unknown };
-        const text = typeof body.text === 'string' ? body.text : '';
-        if (!text.trim()) {
-          json(res, 400, { message: '缺少 text' });
-          return;
-        }
-        const raw = typeof body.lexicon === 'string' ? body.lexicon : readConfig().lexicon;
-        const provider = readConfig().provider;
-        const result = previewLexicon(text, parseLexicon(raw), provider);
-        json(res, 200, { provider, ...result });
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-
-  // 云端音色试听：voice = 云端音色 id，provider = edge|deepseek（缺省跟随当前云端模式）
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/provider/preview',
-    handler: async (req: any, res: any) => {
-      try {
-        const body = (await readJson(req)) as { voice?: unknown; provider?: unknown };
-        const voice = body.voice;
-        if (typeof voice !== 'string' || !voice) {
-          json(res, 400, { message: '缺少云端音色 id' });
-          return;
-        }
-        // 客户端显式带 provider；旧客户端不带时按当前模式（gsv 时仍回退 edge，保持老行为）
-        const current = readConfig().provider;
-        const requested: ProviderKind =
-          typeof body.provider === 'string' && getProviderDescriptor(body.provider)
-            ? (body.provider as ProviderKind)
-            : current == 'gsv'
-              ? 'edge'
-              : current;
-        const r = await tts.synthesize(PREVIEW_TEXT, voice, undefined, requested);
-        json(res, 200, { audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: voice });
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
-
-  // 自动朗读轮询：前端带着上次看到的 seq 来，服务端返回当前 seq 与新文本
-  // （text 仅在 seq 前进时有意义；无新回复时返回当前 seq，前端据此判断无变化）。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/autoplay/poll',
-    handler: async (req: any, res: any) => {
-      try {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
-        const { sinceSeq } = JSON.parse(raw || '{}');
-        json(res, 200, {
-          seq: autoPlay.seq,
-          text: typeof sinceSeq === 'number' && autoPlay.seq > sinceSeq ? autoPlay.text : null,
-        });
-      } catch {
-        json(res, 200, { seq: autoPlay.seq, text: null });
-      }
-    },
-  }));
-
-  // 自动朗读合成：按 seq 取暂存文本，分段合成后返回与 /speak 相同的队列结构。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/autoplay/speak',
-    handler: async (req: any, res: any) => {
-      try {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
-        const { seq } = JSON.parse(raw || '{}');
-        if (seq !== autoPlay.seq || !autoPlay.text) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '没有可朗读的新回复' }));
-          return;
-        }
-        const voice = resolveVoice();
-        if (voice === null) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '未配置音色' }));
-          return;
-        }
-        if (wantsWavStream(req) && typeof voice !== 'string') {
-          const token = createStreamToken(autoPlay.text, voice);
-          json(res, 200, { streamUrl: `/dsh-gsv-tts/speak/stream?token=${token}`, voiceUsed: voice.name });
-          return;
-        }
-        if (wantsStream(req)) {
-          await streamSegments(req, res, autoPlay.text, voice);
-          return;
-        }
-        try {
-          const r = await tts.synthesizeSegments(autoPlay.text, voice);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            segments: r.segments,
-            audioUrl: r.segments[0]?.url ?? null,
-            audioLen: r.totalLen,
-            voiceUsed: typeof voice === 'string' ? voice : voice.name,
-            error: r.error,
-          }));
-        } catch (e: any) {
-          await failSynthesis(res, e);
-        }
-      } catch (e: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: String(e?.message ?? e) }));
-      }
-    },
-  }));
-
-  // 音色试听：接收草稿音色完整参数（不查已保存配置——未保存的音色也能直接试听），
-  // 用固定文案单次合成，返回音频 URL。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/preview',
-    handler: async (req: any, res: any) => {
-      try {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
-        const body = JSON.parse(raw || '{}');
-        const v: Record<string, unknown> = body.voice ?? {};
-        const name = String(v.name ?? '试听音色');
-        const speakerAudioPath = String(v.speakerAudioPath ?? '');
-        const promptAudioPath = String(v.promptAudioPath ?? '');
-        if (!speakerAudioPath || !promptAudioPath) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '试听需要填写 参考音频路径 与 提示音频路径' }));
-          return;
-        }
-        try {
-          // 试听是 GSV 克隆素材专用，强制走 gsv 提供方（edge 模式客户端会隐藏市场）
-          const r = await tts.synthesize(
-            PREVIEW_TEXT,
-            {
-              name,
-              speakerAudioPath,
-              promptAudioPath,
-              promptText: String(v.promptText ?? ''),
-            },
-            undefined,
-            'gsv',
-          );
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ audioUrl: r.audioUrl, audioLen: r.audioLen, voiceUsed: name }));
-        } catch (e: any) {
-          // 引擎未启动是最常见失败：给出明确原因
-          const engineStatus = await engineCtl().status();
-          if (!engineStatus.running) {
-            res.writeHead(503, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ message: '语音引擎未启动，请到上方打开引擎开关' }));
-            return;
-          }
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: String(e?.message ?? e) }));
-        }
-      } catch (e: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: String(e?.message ?? e) }));
-      }
-    },
-  }));
-
-  // ─── 音色市场（双通道的 HTTP 侧，与 tts_voice_* 工具共享 voiceRegistry 核心） ───
-  const readJson = async (req: any): Promise<Record<string, unknown>> => {
-    let raw = '';
-    for await (const chunk of req) raw += chunk;
-    const parsed = JSON.parse(raw || '{}');
-    return parsed && typeof parsed === 'object' ? parsed : {};
-  };
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/registry/list',
-    handler: async (req: any, res: any) => {
-      try {
-        const { registryUrl } = await readJson(req);
-        json(res, 200, await voiceRegistry.list(typeof registryUrl === 'string' ? registryUrl : undefined));
-      } catch (e: any) {
-        json(res, 200, { ok: false, message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/registry/install',
-    handler: async (req: any, res: any) => {
-      try {
-        const { id, confirm } = await readJson(req);
-        if (typeof id !== 'string' || !id) {
-          json(res, 400, { ok: false, message: '缺少 id' });
-          return;
-        }
-        json(res, 200, await voiceRegistry.install(id, confirm === true));
-      } catch (e: any) {
-        json(res, 200, { ok: false, message: String(e?.message ?? e) });
-      }
-    },
-  }));
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/registry/remove',
-    handler: async (req: any, res: any) => {
-      try {
-        const { id, deleteFiles } = await readJson(req);
-        if (typeof id !== 'string' || !id) {
-          json(res, 400, { ok: false, message: '缺少 id' });
-          return;
-        }
-        json(res, 200, await voiceRegistry.remove(id, deleteFiles !== false));
-      } catch (e: any) {
-        json(res, 200, { ok: false, message: String(e?.message ?? e) });
-      }
-    },
-  }));
-
-  // 朗读按钮调用：按 sessionId+messageId 取助手消息文本（不含思考），合成并返回音频 URL
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/speak',
-    handler: async (req: any, res: any) => {
-      try {
-        let raw = '';
-        for await (const chunk of req) raw += chunk;
-        const body = JSON.parse(raw || '{}');
-        const { sessionId, messageId } = body;
-        // 支持直接传 text（选中文字朗读），否则按 sessionId+messageId 取助手消息
-        let text = typeof body.text === 'string' ? TextCleaner.clean(body.text) : '';
-        if (!text) {
-          if (!sessionId || !messageId) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ message: '缺少 sessionId/messageId 或 text' }));
-            return;
-          }
-          const sessions = ctx.get('sessions');
-          const session = sessions?.get(sessionId);
-          if (!session) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ message: '会话不存在' }));
-            return;
-          }
-          // DSH 0.2+：同步读取整段事件日志请用 snapshotEvents()（events/log 已不再保证存在）。
-          const events: Array<{ type?: string; data?: { message?: { id?: string; content?: Array<{ type?: string; text?: string }> } } }> =
-            typeof session.snapshotEvents === 'function'
-              ? session.snapshotEvents()
-              : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
-          let content: Array<{ type?: string; text?: string }> = [];
-          for (const ev of events) {
-            if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
-              content = ev.data?.message?.content ?? [];
-              break;
-            }
-          }
-          if (content.length === 0) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ message: '未找到消息' }));
-            return;
-          }
-          // 只取文本块（type === 'text'），排除思考/工具调用等；空文本判断用清洗后文本，
-          // 与合成口径一致——只有代码块/链接/表格的回复应给友好提示，而不是 404
-          const rawText = content
-            .filter((b) => b.type === 'text')
-            .map((b) => b.text ?? '')
-            .join('');
-          text = TextCleaner.clean(rawText);
-        }
-        if (!text) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '没有可朗读的文本（可能只包含代码/链接/表格等）' }));
-          return;
-        }
-        if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: `文本过长（${text.length} 字符），请分段朗读` }));
-          return;
-        }
-        const voice = resolveVoice();
-        if (voice === null) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ message: '未配置音色' }));
-          return;
-        }
-        if (wantsWavStream(req) && typeof voice !== 'string') {
-          const token = createStreamToken(text, voice);
-          json(res, 200, { streamUrl: `/dsh-gsv-tts/speak/stream?token=${token}`, voiceUsed: voice.name });
-          return;
-        }
-        if (wantsStream(req)) {
-          await streamSegments(req, res, text, voice);
-          return;
-        }
-        try {
-          // 渐进分段合成：按句切分逐段落地，返回可顺序播放的 URL 队列
-          const r = await tts.synthesizeSegments(text, voice);
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            segments: r.segments,
-            audioUrl: r.segments[0]?.url ?? null,
-            audioLen: r.totalLen,
-            voiceUsed: typeof voice === 'string' ? voice : voice.name,
-            error: r.error,
-          }));
-        } catch (e: any) {
-          await failSynthesis(res, e);
-        }
-      } catch (e: any) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: String(e?.message ?? e) }));
-      }
-    },
-  }));
-
-  // 整段朗读（可选）：返回单个可 seek / 可下载的音频文件。
-  // 默认朗读仍走 /speak 的流式 WAV，不牺牲首音；这里只服务于「整段播放/下载」。
-  ctx.effect(() => ctx.webServer.register({
-    kind: 'exact',
-    path: '/dsh-gsv-tts/speak/full',
-    handler: async (req: any, res: any) => {
-      try {
-        const body = await readJson(req);
-        let text = typeof body.text === 'string' ? body.text : '';
-        if (!text.trim()) {
-          const { sessionId, messageId } = body as { sessionId?: string; messageId?: string };
-          if (!sessionId || !messageId) {
-            json(res, 400, { message: '缺少 text 或 sessionId/messageId' });
-            return;
-          }
-          const sessions = ctx.get('sessions');
-          const session = sessions?.get(sessionId);
-          if (!session) {
-            json(res, 404, { message: '会话不存在' });
-            return;
-          }
-          const events: any[] = typeof session.snapshotEvents === 'function'
-            ? session.snapshotEvents()
-            : (session.events ?? session.eventsSnapshot ?? session.log ?? []);
-          let content: any[] = [];
-          for (const ev of events) {
-            if (ev.type === 'assistant/message' && ev.data?.message?.id === messageId) {
-              content = ev.data?.message?.content ?? [];
-              break;
-            }
-          }
-          if (!Array.isArray(content) || content.length === 0) {
-            json(res, 404, { message: '未找到消息' });
-            return;
-          }
-          text = content.filter((b: any) => b.type === 'text').map((b: any) => b.text ?? '').join('');
-        }
-        text = TextCleaner.clean(text);
-        if (!text) {
-          json(res, 400, { message: '没有可朗读的文本（可能只包含代码/链接/表格等）' });
-          return;
-        }
-        if (text.length > MAX_SEGMENTED_TEXT_LENGTH) {
-          json(res, 400, { message: `文本过长（${text.length} 字符），请分段朗读` });
-          return;
-        }
-        const voice = resolveVoice();
-        if (voice === null) {
-          json(res, 400, { message: '未配置音色' });
-          return;
-        }
-        const cfg = readConfig();
-        if (cfg.provider === 'gsv') {
-          if (typeof voice === 'string') {
-            json(res, 400, { message: '本地模式需要音色预设' });
-            return;
-          }
-          // 本地：把引擎 PCM 直接写成完整 WAV，不设超时，长回复也不会被 30 秒截断。
-          const ac = new AbortController();
-          const onClose = () => ac.abort();
-          res.on('close', onClose);
-          try {
-            const r = await tts.synthesizeFullWav(text, voice, ac.signal);
-            json(res, 200, {
-              audioUrl: r.audioUrl,
-              duration: r.duration,
-              bytes: r.bytes,
-              parts: r.parts,
-              voiceUsed: voice.name,
-            });
-          } finally {
-            res.off('close', onClose);
-          }
-          return;
-        }
-        if (cfg.provider === 'deepseek') {
-          // 官方语音：提供方按 2000 字切分，PCM 边收边写文件（内存不随文本线性增长）
-          const ac = new AbortController();
-          const onClose = () => ac.abort();
-          res.on('close', onClose);
-          try {
-            const r = await tts.synthesizeLongWav(text, typeof voice === 'string' ? voice : undefined, ac.signal);
-            json(res, 200, {
-              audioUrl: r.audioUrl,
-              duration: r.duration,
-              bytes: r.bytes,
-              parts: r.parts,
-              voiceUsed: typeof voice === 'string' ? voice : cfg.defaultVoice,
-            });
-          } finally {
-            res.off('close', onClose);
-          }
-          return;
-        }
-        // 云端：按句合成后把 MP3 串成一个文件。
-        // Edge 输出固定 24 kHz / 48 kbps CBR，拼接文件无 Xing 头时直接按字节换算时长。
-        const ac = new AbortController();
-        let aborted = false;
-        const onClose = () => { aborted = true; ac.abort(); };
-        res.on('close', onClose);
-        try {
-          const parts = tts.planSegments(text);
-          const chunks: Buffer[] = [];
-          for (const part of parts) {
-            if (aborted) throw new Error('已取消');
-            const r = await tts.synthesize(part, voice, ac.signal);
-            const fileName = String(r.audioUrl).split('/').pop() as string;
-            chunks.push(readFileSync(join(audioStore.directory, fileName)));
-          }
-          const merged = Buffer.concat(chunks);
-          const saved = audioStore.saveRaw(`reply_${Date.now()}_${randomUUID().slice(0, 8)}.mp3`, merged);
-          json(res, 200, {
-            audioUrl: saved.url,
-            duration: merged.length * 8 / 48000,
-            bytes: merged.length,
-            parts: parts.length,
-            voiceUsed: voice,
-          });
-        } finally {
-          res.off('close', onClose);
-        }
-      } catch (e: any) {
-        json(res, 500, { message: String(e?.message ?? e) });
-      }
-    },
-  }));
+  registerPlaybackRoutes(ctx, {
+    config: readConfig, tts, audio: audioStore, engine: engineManager, registry: voiceRegistry, stats,
+    previewText: PREVIEW_TEXT, prewarm: prewarmDefaultVoice,
+    writeVoiceSelection: patch => ctx.settings.update(entryId, patch),
+  });
 
   // ─── 工具 1: tts_speak ─── 将文本转换为语音 ───
   const speakTool = defineTool({
@@ -1098,7 +349,8 @@ export function apply(ctx: any, config: any) {
   // ─── 工具 4: tts_setup_engine ─── 辅助下载安装 GSV-TTS-Lite ───
   const setupEngineTool = defineTool({
     name: 'tts_setup_engine',
-    description: '辅助安装 GSV-TTS-Lite 引擎：检测环境、安装 pip 包、克隆仓库、启动 API 服务。安装完成后请再次执行 tts_health_check 验证。',
+    description: '经用户确认后，在隔离 Python 环境中安装固定版本的 GSV-TTS-Lite 引擎并启动本机 API 服务。',
+    timeoutMs: 1_200_000,
     parameters: {},
     output: {
       schema: {
@@ -1136,8 +388,18 @@ export function apply(ctx: any, config: any) {
         ];
       },
     },
-    async execute() {
-      return await setup.setup();
+    async execute(_args, exec) {
+      const cfg = readConfig();
+      const approver = ctx.get?.('approval');
+      if (!exec.agent || typeof approver?.request !== 'function') throw new Error('当前宿主无法确认本地引擎安装，请由用户手动安装。');
+      const directory = enginePaths(cfg.installDir).root;
+      const result = await approver.request({
+        agent: exec.agent, toolName: 'tts_setup_engine', callId: exec.callId, signal: exec.signal,
+        reason: `将在 ${directory} 下载固定版本的引擎，创建独立 Python 环境、安装依赖并启动仅本机可访问的服务。`,
+      });
+      exec.signal.throwIfAborted();
+      if (result !== 'allowed-once') throw new Error('用户未授权安装本地语音引擎。');
+      return setup.setup(cfg, exec.signal);
     },
   });
 
@@ -1411,15 +673,13 @@ export function apply(ctx: any, config: any) {
       let setupFacts: SetupFacts | undefined;
       let engineLog: string[] = [];
       if (needsEngine) {
-        const status = await engineCtl().status();
-        const modelsDir = existsSync(join(cfg.installDir, 'models'))
-          ? join(cfg.installDir, 'models')
-          : join(cfg.installDir, 'API', 'models');
+        const status = await engineManager.status(cfg);
+        const paths = enginePaths(cfg.installDir);
         engine = {
           running: status.running,
           apiUrl: cfg.apiUrl,
-          startScriptExists: existsSync(join(cfg.installDir, GSV_ENGINE.startScript)),
-          models: GSV_ENGINE.models.map((m) => ({ ...m, present: existsSync(join(modelsDir, m.file)) })),
+          startScriptExists: existsSync(paths.python) && existsSync(join(paths.source, 'pyproject.toml')),
+          models: GSV_ENGINE.models.map(m => ({ ...m, present: existsSync(join(paths.models, m.file)) })),
         };
         try {
           const h = await setup.healthCheck();
@@ -1433,7 +693,7 @@ export function apply(ctx: any, config: any) {
           // 健康检查失败不影响其余诊断
         }
         try {
-          const log = readFileSync(join(tmpdir(), 'dsh-gsv-tts-engine.log'), 'utf8');
+          const log = readFileSync(paths.log, 'utf8');
           engineLog = log
             .trimEnd()
             .split(/\r?\n/)
@@ -1494,24 +754,4 @@ export function apply(ctx: any, config: any) {
   ctx.tools.register(voiceRegistryTool);
   ctx.tools.register(voiceInstallTool);
   ctx.tools.register(voiceRemoveTool);
-
-  // ─── 自动朗读：监听 session/event（常驻监听，是否朗读由运行时配置决定，支持设置热切换） ───
-  // 服务端只做"新回复通知"（递增 seq 并暂存清洗后文本），由前端轮询触发合成与播放，
-  // 打断/防重叠（barge-in）在前端播放层执行，受 interruptOnNew 开关控制。
-  ctx.on('session/event', (session: unknown, event: { type: string; data: { message: { id?: string; content: Array<{ type: string; text?: string }> } } }) => {
-    if (!readConfig().autoPlay) return;
-    if (event.type !== 'assistant/message') return;
-    const messageId = event.data.message?.id;
-    if (!messageId) return;
-    const rawText = (event.data.message.content || [])
-      .filter((b) => b.type === 'text')
-      .map((b) => b.text || '')
-      .join('');
-    const text = TextCleaner.clean(rawText);
-    if (!text || text.length > MAX_SEGMENTED_TEXT_LENGTH) return;
-    if (text === autoPlay.text) return; // 同一内容重复事件不重复通知
-    autoPlay.seq += 1;
-    autoPlay.text = text;
-    ctx.logger?.info?.('dsh-gsv-tts 自动朗读: 新回复已就绪 (seq=%d)', autoPlay.seq);
-  });
 }

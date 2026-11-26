@@ -12,8 +12,8 @@ import {
   isValidVoiceId,
 } from '../lib/catalog.js';
 
-test('目录：三个 provider，id 唯一且可查', () => {
-  assert.deepEqual(providerIds(), ['edge', 'deepseek', 'gsv']);
+test('目录：四个 provider，id 唯一且可查', () => {
+  assert.deepEqual(providerIds(), ['edge', 'deepseek', 'custom', 'gsv']);
   assert.equal(getProviderDescriptor('deepseek').label.includes('DeepSeek'), true);
   assert.equal(getProviderDescriptor('nope'), undefined);
 });
@@ -30,6 +30,7 @@ test('目录：能力决定 UI 分支（引擎/凭据/音色来源）', () => {
 
   assert.equal(deepseek.capabilities.needsKey, true);
   assert.equal(deepseek.capabilities.billed, true);
+  assert.equal(deepseek.capabilities.streaming, true);
   assert.equal(deepseek.capabilities.voiceSource, 'builtin');
   assert.equal(deepseek.defaultVoice, 'stella', '官方默认音色来自目录');
 
@@ -58,7 +59,7 @@ test('目录：音色校验与默认音色由描述符决定', () => {
 
 test('目录：引擎模型清单是事实源（doctor/setup 共用）', () => {
   assert.equal(GSV_ENGINE.id, 'gsv');
-  assert.equal(GSV_ENGINE.startScript, 'API/dsh_stream_api.py');
+  assert.equal(GSV_ENGINE.startScript, 'scripts/dsh_stream_api.py');
   const files = GSV_ENGINE.models.map((m) => m.file);
   assert.deepEqual(files, ['s1v3.ckpt', 's2Gv2ProPlus.pth']);
   assert.ok(GSV_ENGINE.models.every((m) => m.required));
